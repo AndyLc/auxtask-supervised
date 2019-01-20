@@ -85,39 +85,41 @@ class Net(nn.Module):
         self.netType = netType
 
         #large
-        self.conv1_1 = nn.Conv2d(3, 16, 3)
-        self.conv1_2 = nn.Conv2d(3, 16, 3)
-        self.conv1_3 = nn.Conv2d(3, 16, 3)
-        self.conv1_4 = nn.Conv2d(3, 16, 3)
+        self.conv1_1 = nn.Conv2d(3, 64, 3)
+        self.conv1_2 = nn.Conv2d(3, 64, 3)
+        self.conv1_3 = nn.Conv2d(3, 64, 3)
+        self.conv1_4 = nn.Conv2d(3, 64, 3)
 
-        self.conv2_1 = nn.Conv2d(16, 16, 3)
-        self.conv2_2 = nn.Conv2d(16, 16, 3)
-        self.conv2_3 = nn.Conv2d(16, 16, 3)
-        self.conv2_4 = nn.Conv2d(16, 16, 3)
+        self.conv2_1 = nn.Conv2d(64, 64, 3)
+        self.conv2_2 = nn.Conv2d(64, 64, 3)
+        self.conv2_3 = nn.Conv2d(64, 64, 3)
+        self.conv2_4 = nn.Conv2d(64, 64, 3)
 
-        self.conv3_1 = nn.Conv2d(16, 32, 3)
-        self.conv3_2 = nn.Conv2d(16, 32, 3)
-        self.conv3_3 = nn.Conv2d(16, 32, 3)
-        self.conv3_4 = nn.Conv2d(16, 32, 3)
+        self.conv3_1 = nn.Conv2d(64, 128, 3)
+        self.conv3_2 = nn.Conv2d(64, 128, 3)
+        self.conv3_3 = nn.Conv2d(64, 128, 3)
+        self.conv3_4 = nn.Conv2d(64, 128, 3)
 
-        self.conv4_1 = nn.Conv2d(32, 32, 3)
-        self.conv4_2 = nn.Conv2d(32, 32, 3)
-        self.conv4_3 = nn.Conv2d(32, 32, 3)
-        self.conv4_4 = nn.Conv2d(32, 32, 3)
+        self.conv4_1 = nn.Conv2d(128, 128, 3)
+        self.conv4_2 = nn.Conv2d(128, 128, 3)
+        self.conv4_3 = nn.Conv2d(128, 128, 3)
+        self.conv4_4 = nn.Conv2d(128, 128, 3)
 
         self.pool = nn.MaxPool2d(2, 2)
 
-        self.fc1_0 = nn.Linear(32 * 5 * 5, 16)
+        self.fc1_0 = nn.Linear(128 * 5 * 5, 16)
         self.fc2_0 = nn.Linear(16, len(task0_classes))
 
-        self.fc1_1 = nn.Linear(32 * 5 * 5, 16)
+        self.fc1_1 = nn.Linear(128 * 5 * 5, 16)
         self.fc2_1 = nn.Linear(16, 1)
 
-        self.fc1_2 = nn.Linear(32 * 5 * 5, 16)
+        self.fc1_2 = nn.Linear(128 * 5 * 5, 16)
         self.fc2_2 = nn.Linear(16, 1)
 
-        self.fc1_3 = nn.Linear(32 * 5 * 5, 16)
+        self.fc1_3 = nn.Linear(128 * 5 * 5, 16)
         self.fc2_3 = nn.Linear(16, len(task3_classes))
+
+        self.softmax = nn.Softmax(dim=1) #LogSoftmax or Softmax?
 
     def forward(self, x):
         l0 = x
@@ -171,31 +173,31 @@ class Net(nn.Module):
         elif self.netType[2] == 3:
             l4_4 = self.pool(F.relu(self.conv4_4(l3)))
 
-        x1 = l4.view(-1, 32 * 5 * 5)
+        x1 = l4.view(-1, 128 * 5 * 5)
         x1 = self.fc2_0(F.relu(self.fc1_0(x1)))
 
         if self.netType[0] == 4:
-            x2 = l4.view(-1, 32 * 5 * 5)
+            x2 = l4.view(-1, 128 * 5 * 5)
             x2 = self.fc2_1(F.relu(self.fc1_1(x2)))
         else:
-            x2 = l4_2.view(-1, 32 * 5 * 5)
+            x2 = l4_2.view(-1, 128 * 5 * 5)
             x2 = self.fc2_1(F.relu(self.fc1_1(x2)))
 
         if self.netType[1] == 4:
-            x3 = l4.view(-1, 32 * 5 * 5)
+            x3 = l4.view(-1, 128 * 5 * 5)
             x3 = self.fc2_2(F.relu(self.fc1_2(x3)))
         else:
-            x3 = l4_3.view(-1, 32 * 5 * 5)
+            x3 = l4_3.view(-1, 128 * 5 * 5)
             x3 = self.fc2_2(F.relu(self.fc1_2(x3)))
 
         if self.netType[2] == 4:
-            x4 = l4.view(-1, 32 * 5 * 5)
+            x4 = l4.view(-1, 128 * 5 * 5)
             x4 = self.fc2_3(F.relu(self.fc1_3(x4)))
         else:
-            x4 = l4_4.view(-1, 32 * 5 * 5)
+            x4 = l4_4.view(-1, 128 * 5 * 5)
             x4 = self.fc2_3(F.relu(self.fc1_3(x4)))
 
-        return x1, x2, x3, x4
+        return self.softmax(x1), x2, x3, self.softmax(x4)
 
 def train(net, optimizer, c_crit, r_crit, cud=None, epochs=1):
     for epoch in range(epochs):  # loop over the dataset multiple times
@@ -279,7 +281,7 @@ def test_overall(net, performance=None):
 
     print('task_2 error of the network on the 10000 test images: %d %%' % (
         100 * error2 / (total2*4)))
-    
+
     print('task_3 accuracy of the network on the 10000 test images: %d %%' % (
         100 * correct3 / total3))
 
