@@ -137,8 +137,7 @@ class Superimposed(Dataset):
         mnist_img = mnist_img.convert("RGB")
         img = Image.blend(mnist_img, cifar_img, 0.5)
         target = torch.tensor([cifar_target, mnist_target])
-
         return self.to_tensor(img), target
 
     def __len__(self):
-        return min(len(self.cifar_data), len(self.mnist_data))
+        return int(min(len(self.cifar_data), len(self.mnist_data))/8)
