@@ -1,12 +1,9 @@
 import torch
 import torchvision
 import torchvision.transforms as transforms
-import pandas as pd
 import matplotlib
 matplotlib.use('tkagg')
-import matplotlib.pyplot as plt
 from noise_position import Position
-import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import time
@@ -25,20 +22,20 @@ transform = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-trainset = Position('./cifar_data', train=True,
-                                        download=True)
+trainset = Position('../cifar_data', train=True,
+                                        download=True, data_portion=0.125)
 
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
                                           shuffle=True, num_workers=2)
 
-testset = Position('./cifar_data', train=False,
-                                        download=True)
+testset = Position('../cifar_data', train=False,
+                                        download=True, data_portion=0.125)
 
 testloader = torch.utils.data.DataLoader(testset, batch_size=4,
                                          shuffle=False, num_workers=2)
 
-print(len(trainset))
-print(len(testset))
+print("Train Data Count:", len(trainset))
+print("Test Data Count:", len(testset))
 
 
 # Here we ensure that there is no correlation between numbers and objects in our dataset.
@@ -211,7 +208,29 @@ def train(net, optimizer, c_crit, log=None, cud=None, epochs=1):
             loss2 = c_crit(outputs2, labels2)
             loss3 = c_crit(outputs3, labels3)
             loss4 = c_crit(outputs4, labels4)
-            loss = (loss1 + loss2/3 + loss3/3 + loss4) / 4
+
+            """
+            # Entropy regularization
+            for name, param in net.named_parameters():
+                if param.requires_grad:
+                    if name == "g_logits":
+                        #print(name, param.data)
+                        distr0 = nn.functional.softmax(param.data[0], dim=0)
+                        log0 = torch.mul(torch.log2(distr0), -1)
+                        #print("distr0:", nn.functional.softmax(param.data[1]))
+                        #print("logDistr:", torch.log2(distr0))
+                        #print("negLogDistr:", log0)
+                        #print("entropy:", distr0 * log0)
+                        #print("sum:", torch.sum(distr0 * log0))
+                        distr1 = nn.functional.softmax(param.data[0], dim=0)
+                        log1 = torch.mul(torch.log2(distr1), -1)
+                        #print(nn.functional.softmax(param.data[2], dim=0))
+                        distr2 = nn.functional.softmax(param.data[0], dim=0)
+                        log2 = torch.mul(torch.log2(distr2), -1)
+                        entropy_loss = torch.sum(distr0 * log0) + torch.sum(distr1 * log1) + torch.sum(distr2 * log2)
+            """
+
+            loss = (loss1 + loss2 / 3 + loss3 / 3 + loss4 * 2) / 4# + 10 * entropy_loss
             loss.backward()
             optimizer.step()
 
