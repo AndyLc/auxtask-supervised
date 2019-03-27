@@ -4,21 +4,60 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import normal
 
+
 class GatingNet(nn.Module):
-    def __init__(self, cuda=None):
+    def __init__(self, cuda=None, tasks=None):
         super(GatingNet, self).__init__()
         self.cuda = cuda
+        self.blocks = 3
         self.normal = normal.Normal(0.0, 0.0001)
+        self.tasks = tasks
+        self.gate_log = torch.zeros([len(self.tasks), self.blocks])
+        self.gate_count_log = torch.zeros([len(self.tasks)])
+
+        if cuda:
+            self.gate_log = self.gate_log.cuda(cuda)
+            self.gate_count_log = self.gate_count_log.cuda(cuda)
 
     def setup(self, optimizer=None, criterion=None):
-        if optimizer == None:
+        self.g_logits = nn.Parameter(torch.zeros([len(self.tasks), self.blocks]))
+        self.config = torch.zeros(self.blocks, len(self.tasks), 1, self.blocks, 1)
+        for c in range(self.blocks):
+            for t in range(len(self.tasks)):
+                for b in range(self.blocks):
+                    if c == b:
+                        self.config[c, t, 0, b, 0] = 1
+
+
+        """
+        self.mix_logits = nn.Parameter(torch.zeros([len(self.tasks), 2 ** self.blocks]))
+        self.mix_config = torch.zeros(2 ** self.blocks, len(self.tasks), 1, self.blocks, 1)
+        for c in range(2 ** self.blocks):
+            for t in range(len(self.tasks)):
+                for b in range(self.blocks):
+                    if (c // (2**b)) % 2 == 1:
+                        self.mix_config[c, t, 0, b, 0] = 1
+
+        self.mix_map = torch.zeros(2 ** self.blocks, self.blocks)
+        for c in range(2 ** self.blocks):
+            for b in range(self.blocks):
+                if (c // (2 ** b)) % 2 == 1:
+                    self.mix_map[c, b] = 1
+        """
+
+        if self.cuda:
+            self.config = self.config.cuda(self.cuda)
+            self.mix_config = self.config.cuda(self.cuda)
+
+        self.softmax = nn.LogSoftmax(dim=1)
+        if optimizer is None:
             self.optimizer = optim.Adam(self.parameters())
-        if criterion == None:
+        if criterion is None:
             self.criterion = nn.CrossEntropyLoss()
             if self.cuda:
                 self.criterion.cuda(self.cuda)
 
-    def train_epoch(self, disable_non_cifar=False):
+    def train_epoch(self, sample=False, individual=False, mixture=False, log_interval=1000):
         print("Starting Training")
         if self.log:
             print("Starting Training", file=open(self.log, "a"))
@@ -26,33 +65,50 @@ class GatingNet(nn.Module):
         for i, data in enumerate(self.trainloader, 0):
             # get the inputs
             inputs, labels = data
-            if self.cuda != None:
+            if self.cuda is not None:
                 inputs = inputs.cuda(self.cuda)
                 labels = labels.cuda(self.cuda)
 
-            task_labels = [torch.tensor([t.label_to_task(l) for l in labels]) for t in self.tasks]
+            task_labels = [torch.tensor([t.label_to_task(l) for l in labels], dtype=torch.long) for t in self.tasks]
 
-            if self.cuda != None:
+            if self.cuda is not None:
                 task_labels = [t.cuda(self.cuda) for t in task_labels]
 
             # zero the parameter gradients
             self.optimizer.zero_grad()
-            losses = [self.criterion(out, label) for out, label in zip(self.forward(inputs), task_labels)]
-            if disable_non_cifar:
-                loss = losses[3] / 1.5
-            else:
-                loss = (losses[0] + losses[1] / 3 + losses[2] / 3 + losses[3] * 2) / 4
+
+            # get non-gate parameter loss
+            if sample: #sample
+                outputs, probs = self.forward(inputs, sample=sample, individual=individual, mixture=mixture)
+                losses = [torch.stack([self.criterion(outputs[t][c], task_labels[t]) * probs[t][c] for c in range(self.blocks)]).sum()
+                          for t in range(len(self.tasks))]
+
+            elif mixture:
+                outputs, probs = self.forward(inputs, sample=sample, individual=individual, mixture=mixture)
+                losses = [torch.stack(
+                    [self.criterion(outputs[t][c], task_labels[t]) * probs[t][c] for c in range(2 ** self.blocks)]).sum()
+                          for t in range(len(self.tasks))]
+            else: #blend/individual
+                outputs = self.forward(inputs, sample=sample, individual=individual, mixture=mixture)
+                losses = [self.criterion(out, label) for out, label in zip(outputs, task_labels)]
+
+            scales = [t.scale for t in self.tasks]
+            net_loss = sum([losses[i] * scales[i] for i in range(len(self.tasks))]) / len(losses)
+
+            #get gate loss
+            #gate_loss = net_loss.detach() * probs
+            loss = net_loss #+ gate_loss
             loss.backward()
             self.optimizer.step()
 
             # print statistics
             with torch.no_grad():
                 running_loss_total += loss.item()
-                if i % 1000 == 999:
+                if i % log_interval == log_interval-1:
                     if self.log:
-                        print('[%5d] loss: %.3f' % (i + 1, running_loss_total / 1000), file=open(self.log, "a"))
+                        print('[%5d] loss: %.3f' % (i + 1, running_loss_total / log_interval), file=open(self.log, "a"))
                     else:
-                        print('[%5d] loss: %.3f' % (i + 1, running_loss_total / 1000))
+                        print('[%5d] loss: %.3f' % (i + 1, running_loss_total / log_interval))
                     running_loss_total = 0.0
 
                     for name, param in self.named_parameters():
@@ -60,43 +116,36 @@ class GatingNet(nn.Module):
                             if name == "g_logits":
                                 if self.log:
                                     print(name, param.data, file=open(self.log, "a"))
-                                    print(nn.functional.softmax(param.data[0], dim=0), file=open(self.log, "a"))
-                                    print(nn.functional.softmax(param.data[1], dim=0), file=open(self.log, "a"))
-                                    print(nn.functional.softmax(param.data[2], dim=0), file=open(self.log, "a"))
+                                    for i in range(len(self.tasks)):
+                                        print(nn.functional.softmax(param.data[i], dim=0), file=open(self.log, "a"))
+                                    #for i in range(len(self.tasks)):
+                                    #    print("grad:", self.gate_log[i] / self.gate_count_log[i], file=open(self.log, "a"))
+                                print(name, param.data)
+                                for i in range(len(self.tasks)):
+                                    print(nn.functional.softmax(param.data[i], dim=0))
+                                #for i in range(len(self.tasks)):
+                                #    print("grad:", self.gate_log[i] / self.gate_count_log[i])
 
-                                    print("grad:", self.gate1 / self.gate1_count, file=open(self.log, "a"))
-                                    print("grad:", self.gate2 / self.gate2_count, file=open(self.log, "a"))
-                                    print("grad:", self.gate4 / self.gate4_count, file=open(self.log, "a"))
+                                self.gate_log.zero_()
+                                self.gate_count_log.zero_()
+                            if name == "mix_logits":
+                                if self.log:
+                                    print(name, param.data, file=open(self.log, "a"))
+                                    for i in range(len(self.tasks)):
+                                        print("mix:", nn.functional.softmax(param.data[i], dim=0), file=open(self.log, "a"))
 
                                 print(name, param.data)
-                                print(nn.functional.softmax(param.data[0], dim=0))
-                                print(nn.functional.softmax(param.data[1], dim=0))
-                                print(nn.functional.softmax(param.data[2], dim=0))
-
-                                print("grad:", self.gate1 / self.gate1_count)
-                                print("grad:", self.gate2 / self.gate2_count)
-                                print("grad:", self.gate4 / self.gate4_count)
-                                self.gate1 = torch.zeros([1, 3]).cuda(self.cuda)
-                                self.gate1_count = 0
-                                self.gate2 = torch.zeros([1, 3]).cuda(self.cuda)
-                                self.gate2_count = 0
-                                self.gate4 = torch.zeros([1, 3]).cuda(self.cuda)
-                                self.gate4_count = 0
-
+                                for i in range(len(self.tasks)):
+                                    print("mix:", nn.functional.softmax(param.data[i], dim=0))
 
         print('Finished Training')
         if self.log:
             print("Finished Training", file=open(self.log, "a"))
 
-    def test_overall(self):
-        correct0 = 0
-        total0 = 0
-        correct1 = 0
-        total1 = 0
-        correct2 = 0
-        total2 = 0
-        correct3 = 0
-        total3 = 0
+    def test_overall(self, sample=False, individual=False, mixture=False):
+        self.eval()
+        correct_arr = [0 for i in range(len(self.tasks))]
+        total_arr = [0 for i in range(len(self.tasks))]
         with torch.no_grad():
             for data in self.testloader:
                 inputs, labels = data
@@ -104,131 +153,121 @@ class GatingNet(nn.Module):
                     inputs = inputs.cuda(self.cuda)
                     labels = labels.cuda(self.cuda)
 
-                task_labels = [torch.tensor([t.label_to_task(l) for l in labels]) for t in self.tasks]
+                task_labels = [torch.tensor([t.label_to_task(l) for l in labels], dtype=torch.long) for t in self.tasks]
                 if self.cuda != None:
                     task_labels = [t.cuda(self.cuda) for t in task_labels]
 
-
-                outputs = self.forward(inputs, test=True)
+                outputs = self.forward(inputs, test=True, sample=sample, individual=individual, mixture=mixture)
                 predicted = [torch.max(output.data, 1)[1] for output in outputs]
 
-                total0 += task_labels[0].size(0)
-                total1 += task_labels[1].size(0)
-                total2 += task_labels[2].size(0)
-                total3 += task_labels[3].size(0)
-
-                correct0 += (predicted[0] == task_labels[0]).sum().item()
-                correct1 += (predicted[1] == task_labels[1]).sum().item()
-                correct2 += (predicted[2] == task_labels[2]).sum().item()
-                correct3 += (predicted[3] == task_labels[3]).sum().item()
+                for i in range(len(self.tasks)):
+                    total_arr[i] += task_labels[i].size(0)
+                    correct_arr[i] += (predicted[i] == task_labels[i]).sum().item()
 
         if self.log:
-            print('task_0 accuracy of the network on the 10000 test images: %d %%' % (
-                    100 * correct0 / total0), file=open(self.log, "a"))
-            print('task_1 accuracy of the network on the 10000 test images: %d %%' % (
-                    100 * correct1 / total1), file=open(self.log, "a"))
-            print('task_2 accuracy of the network on the 10000 test images: %d %%' % (
-                    100 * correct2 / total2), file=open(self.log, "a"))
-            print('task_3 accuracy of the network on the 10000 test images: %d %%' % (
-                    100 * correct3 / total3), file=open(self.log, "a"))
+            for i in range(len(self.tasks)):
+                print('task_' + str(i) + ' accuracy of the network on the 10000 test images: %d %%' % (
+                        100 * correct_arr[i] / total_arr[i]), file=open(self.log, "a"))
 
-        print('task_0 accuracy of the network on the 10000 test images: %d %%' % (
-            100 * correct0 / total0))
-        print('task_1 accuracy of the network on the 10000 test images: %d %%' % (
-            100 * correct1 / total1))
-        print('task_2 accuracy of the network on the 10000 test images: %d %%' % (
-            100 * correct2 / total2))
-        print('task_3 accuracy of the network on the 10000 test images: %d %%' % (
-               100 * correct3 / total3))
+        for i in range(len(self.tasks)):
+            print('task_' + str(i) + ' accuracy of the network on the 10000 test images: %d %%' % (
+                    100 * correct_arr[i] / total_arr[i]))
 
+        self.train()
 
-    def log_gate1(self, v):
-        self.gate1 += v
-        self.gate1_count += 1
-
-    def log_gate2(self, v):
-        self.gate2 += v
-        self.gate2_count += 1
-
-    def log_gate4(self, v):
-        self.gate4 += v
-        self.gate4_count += 1
+    def log_gate(self, v, i):
+        self.gate_log[i] += v
 
     def add_normal_noise(self, v):
         return v + self.normal.sample()
 
+    def log_assign(self, i):
+        return lambda grad: self.log_gate(grad, i)
 
-    def forward(self, img, test=False):  # make number of blocks, tasks variable
-        # Task 1
-        t1 = self.conv1(img)
-        # Task 2, 3
-        t23 = self.conv2(img)
-        # Task 4
-        t4 = self.conv3(img)
+    def forward(self, img, test=False, sample=False, individual=False, mixture=False):
 
-        if self.conv_noise and test == False:
-            t1.register_hook(self.add_normal_noise)
-            t23.register_hook(self.add_normal_noise)
-            t4.register_hook(self.add_normal_noise)
+        blocks = [self.convs[i](img) for i in range(self.blocks)]
+        stack = torch.stack([t.view(-1, self.fc_out) for t in blocks], dim=1) #batch_size x tasks x vals
 
-        stack = torch.stack([t1.view(-1, self.fc_out), t23.view(-1, self.fc_out), t4.view(-1, self.fc_out)], dim=1)
+        """
+        # Sample and return g1, g2, g4
 
-        # FC & Gate Task 1
-        g1 = nn.functional.softmax(self.g_logits[0], dim=0)
-        x1 = (stack * g1.view(-1, 1)).sum(dim=1)
-        x1 = self.fc2_0(F.relu(self.fc1_0(x1)))
+        g1 = torch.distributions.OneHotCategorical(logits=self.g_logits[0]).sample(
+            [img.shape[0]]) # batch_size x num_blocks
+        g2 = torch.distributions.OneHotCategorical(logits=self.g_logits[1]).sample(
+            [img.shape[0]])  # batch_size x num_blocks
+        g4 = torch.distributions.OneHotCategorical(logits=self.g_logits[2]).sample(
+            [img.shape[0]])  # batch_size x num_blocks
+        
 
-        # FC & Gate Task 2, 3
-        g2 = nn.functional.softmax(self.g_logits[1], dim=0)
-        x2 = (stack * g2.view(-1, 1)).sum(dim=1)
-        loc = F.relu(self.fc1_1(x2))
-        x2 = self.fc2_1(loc)
-        x3 = self.fc2_2(loc)
+        prob_g1 = (nn.functional.softmax(self.g_logits[0], dim=0) * g1).sum(dim=1)
+        prob_g2 = (nn.functional.softmax(self.g_logits[1], dim=0) * g2).sum(dim=1)
+        prob_g3 = (nn.functional.softmax(self.g_logits[2], dim=0) * g2).sum(dim=1)
+        """
 
-        # FC & Gate Task 4
-        g4 = nn.functional.softmax(self.g_logits[2], dim=0)
-        x4 = (stack * g4.view(-1, 1)).sum(dim=1)
-        x4 = self.fc2_3(F.relu(self.fc1_3(x4)))
+        if sample:
+            if self.training:
+                #print("sample to train")
+                stack = stack.reshape(1, stack.shape[0], stack.shape[1], stack.shape[2]).repeat(len(self.tasks), 1, 1, 1)
+                probs = nn.functional.softmax(self.g_logits, dim=1)
 
-        if test == False:
-            g1.register_hook(self.log_gate1)
-            g2.register_hook(self.log_gate2)
-            g4.register_hook(self.log_gate4)
+                fc_ins = (stack * self.config).sum(dim=3) #tasks x stack
+                fc_ins = fc_ins.permute(1, 0, 2, 3)
 
-        if self.gate_noise and test == False:
-            g1.register_hook(self.add_normal_noise)
-            g2.register_hook(self.add_normal_noise)
-            g4.register_hook(self.add_normal_noise)
+                fc_outs = [self.fcs[i](fc_ins[i]) for i in range(len(self.tasks))]
+            else:
+                sample_gs = [torch.distributions.OneHotCategorical(logits=self.g_logits[i]).sample(
+                    [img.shape[0]]) for i in range(len(self.tasks))]  # tasks x blocks x batch_size
+                fc_ins = [(stack * g.reshape(g.shape[0], g.shape[1], 1)).sum(dim=1) for g in sample_gs]
+                fc_outs = [self.fcs[i](fc_ins[i]) for i in range(len(self.tasks))]
+        elif individual:
+            fc_outs = [self.fcs[b](blocks[b]) for b in range(self.blocks)]
+        elif mixture:
+            if self.training:
+                probs = nn.functional.softmax(self.mix_logits, dim=1)
 
-        return [self.softmax(x1), self.softmax(x2), self.softmax(x3), self.softmax(x4)]
+                gates = nn.functional.softmax(self.g_logits, dim=1)
+                stack = stack.reshape(1, stack.shape[0], stack.shape[1], stack.shape[2]).repeat(len(self.tasks), 1, 1, 1)
+                stack = stack * gates.view(len(self.tasks), 1, self.blocks, 1)
+                fc_ins = (stack * self.mix_config).sum(dim=3)  # tasks x stack
+                fc_ins = fc_ins.permute(1, 0, 2, 3) #task x config x batch_size x block_size
+                fc_outs = [self.fcs[i](fc_ins[i]) for i in range(len(self.tasks))]
+            else:
+                gates = [nn.functional.softmax(self.g_logits[i], dim=0) for i in range(len(self.tasks))]
+                sample_gs = [torch.mm(torch.distributions.OneHotCategorical(logits=self.mix_logits[i]).sample(
+                    [img.shape[0]]), self.mix_map) for i in range(len(self.tasks))]  # tasks x 2**blocks x batch_size
+
+                fc_ins = [(stack * sample_gs[i].reshape(sample_gs[i].shape[0], sample_gs[i].shape[1], 1) *
+                           gates[i].view(-1, 1)).sum(dim=1) for i in range(len(sample_gs))]
+                fc_outs = [self.fcs[i](fc_ins[i]) for i in range(len(self.tasks))]
+        else: #blending
+            gates = [nn.functional.softmax(self.g_logits[i], dim=0) for i in range(len(self.tasks))]
+            fc_ins = [(stack * g.view(-1, 1)).sum(dim=1) for g in gates]
+            fc_outs = [self.fcs[i](fc_ins[i]) for i in range(len(self.tasks))]
+
+        #sample and output
+        #if test == False:
+        #    for i in range(len(gates)):
+        #        gates[i].register_hook(self.log_assign(i))
+        #        self.gate_count_log[i] += 1
+
+        if (sample or mixture) and self.training:
+            return [self.softmax(out) for out in fc_outs], probs
+        else:
+            return [self.softmax(out) for out in fc_outs]
+
 
 class LargeNet(GatingNet):
-    def __init__(self, tasks, trainloader, testloader, log=None, cuda=None, conv_noise=False, gate_noise=False):
-        super(LargeNet, self).__init__(cuda=cuda)
+    def __init__(self, tasks, trainloader, testloader, fc_out, log=None, cuda=None, conv_noise=False, gate_noise=False):
+        super(LargeNet, self).__init__(cuda=cuda, tasks=tasks)
         self.trainloader = trainloader
         self.testloader = testloader
-        self.tasks = tasks
         self.log = log
-        self.fc_out = 128 * 5 * 5
+        self.fc_out = fc_out
         self.conv_noise = conv_noise
         self.gate_noise = gate_noise
 
-        self.gate1 = torch.zeros([1, 3])
-        self.gate1_count = 0
-
-        self.gate2 = torch.zeros([1, 3])
-        self.gate2_count = 0
-
-        self.gate4 = torch.zeros([1, 3])
-        self.gate4_count = 0
-
-        if cuda:
-            self.gate1 = self.gate1.cuda(cuda)
-            self.gate2 = self.gate2.cuda(cuda)
-            self.gate4 = self.gate4.cuda(cuda)
-
-
-        self.conv1 = nn.Sequential(
+        self.convs = nn.ModuleList([nn.Sequential(
             nn.Conv2d(3, 64, 3),
             nn.ReLU(),
             nn.Conv2d(64, 64, 3),
@@ -238,92 +277,128 @@ class LargeNet(GatingNet):
             nn.ReLU(),
             nn.Conv2d(128, 128, 3),
             nn.ReLU(),
-            nn.MaxPool2d(2, 2)
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(3, 64, 3),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3),
-            nn.ReLU(),
             nn.MaxPool2d(2, 2),
-            nn.Conv2d(64, 128, 3),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2)
-        )
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(3, 64, 3),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, 3),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.Conv2d(64, 128, 3),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2)
-        )
+            nn.BatchNorm2d(128, affine=False)
+        ) for _ in range(self.blocks)])
 
+        self.fcs = nn.ModuleList([nn.Sequential(
+            nn.Linear(self.fc_out, 16),
+            nn.Linear(16, tasks[i].size)
+        ) for i in range(len(self.tasks))])
 
-        self.fc1_0 = nn.Linear(128 * 5 * 5, 16)
-        self.fc2_0 = nn.Linear(16, tasks[0].size)
-
-        self.fc1_1 = nn.Linear(128 * 5 * 5, 16)
-        self.fc2_1 = nn.Linear(16, tasks[1].size)
-        self.fc2_2 = nn.Linear(16, tasks[2].size)
-
-        self.fc1_3 = nn.Linear(128 * 5 * 5, 16)
-        self.fc2_3 = nn.Linear(16, tasks[3].size)
-
-        self.g_logits = nn.Parameter(torch.zeros([3, 3]))
-        self.softmax = nn.LogSoftmax(dim=1)
         self.setup()
 
 
-class SmallNet(GatingNet):
-    def __init__(self, tasks, trainloader, testloader, log=None, cuda=None):
-        super(SmallNet, self).__init__(cuda=cuda)
+class LargerNet(GatingNet):
+    def __init__(self, tasks, trainloader, testloader, fc_out, log=None, cuda=None, conv_noise=False, gate_noise=False):
+        super(LargerNet, self).__init__(cuda=cuda, tasks=tasks)
         self.trainloader = trainloader
         self.testloader = testloader
-        self.tasks = tasks
         self.log = log
-        self.fc_out = int(43264/4)
+        self.fc_out = fc_out
+        self.conv_noise = conv_noise
+        self.gate_noise = gate_noise
+
+        self.convs = nn.ModuleList([nn.Sequential(
+            nn.Conv2d(3, 256, 3),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, 3),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(256, 512, 3),
+            nn.ReLU(),
+            nn.Conv2d(512, 512, 3),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.BatchNorm2d(512, affine=False)
+        ) for _ in range(self.blocks)])
+
+        self.fcs = nn.ModuleList([nn.Sequential(
+            nn.Linear(self.fc_out, 16),
+            nn.Linear(16, tasks[i].size)
+        ) for i in range(len(self.tasks))])
+
+        self.setup()
 
 
-        self.conv1 = nn.Sequential(
+class AsymmNet(GatingNet):
+    def __init__(self, tasks, trainloader, testloader, fc_out, log=None, cuda=None, conv_noise=False, gate_noise=False):
+        super(AsymmNet, self).__init__(cuda=cuda, tasks=tasks)
+        self.trainloader = trainloader
+        self.testloader = testloader
+        self.log = log
+        self.fc_out = fc_out
+        self.conv_noise = conv_noise
+        self.gate_noise = gate_noise
+
+        self.convs = nn.ModuleList([nn.Sequential(
+            nn.Conv2d(3, 64, 3, dilation=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3, dilation=2),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, 3),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, 3),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.BatchNorm2d(128, affine=False)
+        ), nn.Sequential(
+            nn.Conv2d(3, 64, 5),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 5),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, 3),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, 3),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.BatchNorm2d(128, affine=False)
+        ), nn.Sequential(
+            nn.Conv2d(3, 64, 3),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, 3),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, 3),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, 5),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.BatchNorm2d(128, affine=False)
+        )])
+
+        self.fcs = nn.ModuleList([nn.Sequential(
+            nn.Linear(self.fc_out, 16),
+            nn.Linear(16, tasks[i].size)
+        ) for i in range(len(self.tasks))])
+
+        self.setup()
+
+
+
+class SmallNet(GatingNet):
+    def __init__(self, tasks, trainloader, testloader, fc_out, log=None, cuda=None, conv_noise=False, gate_noise=False):
+        super(SmallNet, self).__init__(cuda=cuda, tasks=tasks)
+        self.trainloader = trainloader
+        self.testloader = testloader
+        self.log = log
+        self.fc_out = fc_out
+        self.conv_noise = conv_noise
+        self.gate_noise = gate_noise
+
+        self.convs = nn.ModuleList([nn.Sequential(
             nn.Conv2d(3, 32, 4),
             nn.ReLU(),
             nn.Conv2d(32, 64, 4),
             nn.ReLU(),
             nn.MaxPool2d(2, 2)
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(3, 32, 4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 4),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2)
-        )
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(3, 32, 4),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 4),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2)
-        )
+        ) for _ in range(3)])
 
+        self.fcs = nn.ModuleList([nn.Sequential(
+            nn.Linear(self.fc_out, 16),
+            nn.Linear(16, tasks[i].size)
+        ) for i in range(len(self.tasks))])
 
-        self.fc1_0 = nn.Linear(self.fc_out, 16)
-        self.fc2_0 = nn.Linear(16, tasks[0].size)
-
-        self.fc1_1 = nn.Linear(self.fc_out, 16)
-        self.fc2_1 = nn.Linear(16, tasks[1].size)
-        self.fc2_2 = nn.Linear(16, tasks[2].size)
-
-        self.fc1_3 = nn.Linear(self.fc_out, 16)
-        self.fc2_3 = nn.Linear(16, tasks[3].size)
-
-        self.g_logits = nn.Parameter(torch.zeros([3, 3]))
-        self.softmax = nn.LogSoftmax(dim=1)
         self.setup()
