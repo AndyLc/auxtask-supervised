@@ -8,6 +8,7 @@ import numpy as np
 import sys
 import torch
 import torchvision.transforms as transforms
+import torchvision.datasets as datasets
 from torch.utils.data.dataset import Dataset
 
 if sys.version_info[0] == 2:
@@ -215,6 +216,79 @@ class Position(Dataset):
     def __len__(self):
         return int(len(self.data) * self.data_portion)
 
+class CIFAR100(Dataset):
+    def __init__(self, path, train=True, data_portion=1, transform=None):
+        self.data_portion = data_portion
+        self.dataset = datasets.CIFAR100(root=path, train=train, download=True, transform=transform)
+        self.fine_to_coarse = {0: 4, 1: 1, 2: 14, 3: 8, 4: 0, 5: 6, 6: 7, 7: 7, 8: 18, 9: 3, 10: 3, 11: 14, 12: 9, 13: 18, 14: 7, 15: 11, 16: 3, 17: 9, 18: 7, 19: 11, 20: 6, 21: 11, 22: 5, 23: 10, 24: 7, 25: 6, 26: 13, 27: 15, 28: 3, 29: 15, 30: 0, 31: 11, 32: 1, 33: 10, 34: 12, 35: 14, 36: 16, 37: 9, 38: 11, 39: 5, 40: 5, 41: 19, 42: 8, 43: 8, 44: 15, 45: 13, 46: 14, 47: 17, 48: 18, 49: 10, 50: 16, 51: 4, 52: 17, 53: 4, 54: 2, 55: 0, 56: 17, 57: 4, 58: 18, 59: 17, 60: 10, 61: 3, 62: 2, 63: 12, 64: 12, 65: 16, 66: 12, 67: 1, 68: 9, 69: 19, 70: 2, 71: 10, 72: 0, 73: 1, 74: 16, 75: 12, 76: 9, 77: 13, 78: 15, 79: 13, 80: 16, 81: 19, 82: 2, 83: 4, 84: 6, 85: 19, 86: 5, 87: 5, 88: 8, 89: 19, 90: 18, 91: 1, 92: 2, 93: 15, 94: 6, 95: 0, 96: 17, 97: 8, 98: 14, 99: 13}
+        self.fine_classes = ['apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 'bicycle',
+                         'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 'can', 'castle', 'caterpillar',
+                         'cattle', 'chair', 'chimpanzee', 'clock', 'cloud', 'cockroach', 'couch', 'crab', 'crocodile',
+                         'cup', 'dinosaur', 'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
+                         'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion', 'lizard', 'lobster',
+                         'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse', 'mushroom', 'oak_tree', 'orange',
+                         'orchid', 'otter', 'palm_tree', 'pear', 'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy',
+                         'porcupine', 'possum', 'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose', 'sea', 'seal',
+                         'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 'snake', 'spider', 'squirrel', 'streetcar',
+                         'sunflower', 'sweet_pepper', 'table', 'tank', 'telephone', 'television', 'tiger', 'tractor',
+                         'train', 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman',
+                         'worm']
+
+        self.fine_to_label = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 1, 8: 0, 9: 0, 10: 1, 11: 1, 12: 0, 13: 1, 14: 2, 15: 0, 16: 2, 17: 1, 18: 3, 19: 1, 20: 1, 21: 2, 22: 0, 23: 0, 24: 4, 25: 2, 26: 0, 27: 0, 28: 3, 29: 1, 30: 1, 31: 3, 32: 1, 33: 1, 34: 0, 35: 2, 36: 0, 37: 2, 38: 4, 39: 1, 40: 2, 41: 0, 42: 1, 43: 2, 44: 2, 45: 1, 46: 3, 47: 0, 48: 2, 49: 2, 50: 1, 51: 1, 52: 1, 53: 2, 54: 0, 55: 2, 56: 2, 57: 3, 58: 3, 59: 3, 60: 3, 61: 4, 62: 1, 63: 1, 64: 2, 65: 2, 66: 3, 67: 2, 68: 3, 69: 1, 70: 2, 71: 4, 72: 3, 73: 3, 74: 3, 75: 4, 76: 4, 77: 2, 78: 3, 79: 3, 80: 4, 81: 2, 82: 3, 83: 4, 84: 3, 85: 3, 86: 3, 87: 4, 88: 3, 89: 4, 90: 4, 91: 4, 92: 4, 93: 4, 94: 4, 95: 4, 96: 4, 97: 4, 98: 4, 99: 4}
+        self.super_classes = ['aquatic mammals', 'fish', 'flowers', 'food containers', 'fruit and vegetables',
+                         'household electrical devices', 'household furniture', 'insects', 'large carnivores',
+                         'large man-made outdoor things', 'large natural outdoor scenes',
+                         'large omnivores and herbivores', 'medium-sized mammals', 'non-insect invertebrates', 'people',
+                         'reptiles', 'small mammals', 'trees', 'vehicles 1', 'vehicles 2']
+
+    def __getitem__(self, index):
+        data, label = self.dataset.__getitem__(index)
+        #inputs, tasks, labels
+        return data, torch.tensor(self.fine_to_coarse[label]), torch.tensor(self.fine_to_label[label])
+
+    def __len__(self):
+        return int(len(self.dataset) * self.data_portion)
+
+
+class MNIST(Dataset):
+    def __init__(self, path, train=True, data_portion=1, transform=None):
+        self.data_portion = data_portion
+        self.dataset = datasets.MNIST(root=path, train=train, download=True, transform=transform)
+
+        self.super_classes = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+
+    def __getitem__(self, index):
+        i = index // len(self.super_classes)
+        data, label = self.dataset.__getitem__(i)
+        l = torch.zeros([len(self.super_classes)])
+        l[label] = 1
+        return data, index % len(self.super_classes), torch.tensor([l[index % len(self.super_classes)]])
+
+    def __len__(self):
+        return int(len(self.dataset) * len(self.super_classes) * self.data_portion)
+
+
+class RegularMNIST(Dataset):
+    def __init__(self, path, train=True, data_portion=1, transform=None):
+        self.train = train
+        self.data_portion = data_portion
+        self.dataset = datasets.MNIST(root=path, train=train, download=True, transform=transform)
+        self.super_classes = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+
+    def __getitem__(self, index):
+        i = index // len(self.super_classes)
+        data, label = self.dataset.__getitem__(i)
+        l = torch.zeros([len(self.super_classes)])
+        l[label] = 1
+        return data, l
+
+    def __len__(self):
+        if self.train == True:
+            return int(len(self.dataset) * self.data_portion)
+        else:
+            return len(self.dataset)
+
+
 
 """
 
@@ -360,9 +434,15 @@ def get_loader(path, crop_size=178, image_size=128, batch_size=32, dataset='Supe
     transform = T.Compose(transform)
     if dataset == 'CelebA':
         dataset = CelebA(path + "/images", path + "/list_attr_celeba.txt",
-                         ['Bushy_Eyebrows', 'No_Beard', 'Brown_Hair', 'Blond_Hair', 'Black_Hair', 'Eyeglasses'], transform, mode, data_portion=data_portion)
+                         ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes', 'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair', 'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin', 'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones', 'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard', 'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline', 'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair', 'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace', 'Wearing_Necktie', 'Young'], transform, mode, data_portion=data_portion)
     elif dataset == 'Superimposed':
         dataset = Position(path, train=(mode=='train'), data_portion=data_portion)
+    elif dataset == 'CIFAR100':
+        dataset = CIFAR100(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+    elif dataset == 'MNIST':
+        dataset = RegularMNIST(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+
+
     data_loader = data.DataLoader(dataset=dataset,
                                   batch_size=batch_size,
                                   shuffle=(mode=='train'),
