@@ -1,7 +1,13 @@
 import torch
 import data_loader
 from task import Task
-from gating_net import LargeNet, RouteNet, OneLayerNet, TwoLayerNet
+from network import OneLayerBlend, OneLayerSample, OneLayerVI, Individual
+#from gating_net import LargeNet, RouteNet, OneLayerNet, SampledOneLayerNet
+
+
+local = True
+
+
 
 color_classes = ["red", "green", "blue"]
 loc_x_classes = [i for i in range(2, 30)]
@@ -30,7 +36,8 @@ tasks = [color_task, x_task, cifar_classes]
 #['Bushy_Eyebrows', 'No_Beard', 'Brown_Hair', 'Blond_Hair', 'Black_Hair', 'Eyeglasses']
 #celeb_classes = ['Bushy_Eyebrows', 'No_Beard', 'Brown_Hair', 'Blond_Hair', 'Black_Hair', 'Eyeglasses']
 
-celeb_classes = ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes', 'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair', 'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin', 'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones', 'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard', 'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline', 'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair', 'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace', 'Wearing_Necktie', 'Young']
+#celeb_classes = ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes', 'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair', 'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin', 'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones', 'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard', 'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline', 'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair', 'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace', 'Wearing_Necktie', 'Young']
+celeb_classes = ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive']
 
 cifar_classes = ['aquatic mammals', 'fish', 'flowers', 'food containers', 'fruit and vegetables',
                          'household electrical devices', 'household furniture', 'insects', 'large carnivores',
@@ -49,51 +56,320 @@ def get_first_task():
 celebA_tasks = [Task(["Not" + celeb_classes[i], celeb_classes[i]], task_assigner(i)) for i in range(len(celeb_classes))]
 #celebA_tasks[0].scale = 3
 
-cifar_tasks = [Task([i for i in range(5)], get_first_task()) for i in range(5)]
+cifar_tasks = [Task([i for i in range(5)], get_first_task()) for i in range(20)]
+mnist_tasks = [Task([i for i in range(7)], get_first_task()) for i in range(2)]
+mitstates_tasks = [Task([i for i in range(5)], get_first_task()) for i in range(228)]
 
-mnist_tasks = [Task(["not " + mnist_classes[i], mnist_classes[i]], task_assigner(i)) for i in range(10)]
-#mnist_tasks = [Task(["not " + mnist_classes[i], mnist_classes[i]], task_assigner(i)) for i in range(1)]
+if local:
+    cuda0 = None
+else:
+    cuda0 = torch.device('cuda:0')
 
-#cuda0 = torch.device('cuda:0')
-cuda0 = None
 
-
-def run_test(trials=1, data_amts=[1], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar",
-             tasks=cifar_tasks, sample=False, individual=False, mixed=False, VI=False, naive_sample=False, blocks=3):
+def run_test(config, trials=1, data_amts=[1], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar",
+             tasks=None, sample=False, individual=False, VI=False, blending=False):
     for trial in range(trials):
         for data_amt in data_amts:
+
+            if dataset == "CelebA":
+                crop_size = 128
+            else:
+                crop_size = 32
+
             trainloader = data_loader.get_loader(path, dataset=dataset, mode="train", batch_size=32,
-                                                 image_size=32, crop_size=32, data_portion=data_amt)
-            testloader = data_loader.get_loader(path, dataset=dataset, mode="test", batch_size=32,
-                                                image_size=32, crop_size=32, data_portion=data_amt)
+                                                 image_size=32, crop_size=crop_size, data_portion=data_amt)
+
+            if local:
+                testloader = data_loader.get_loader(path, dataset=dataset, mode="train", batch_size=32,
+                                                        image_size=32, crop_size=crop_size, data_portion=data_amt)
+            else:
+                testloader = data_loader.get_loader(path, dataset=dataset, mode="test", batch_size=32,
+                                                    image_size=32, crop_size=crop_size, data_portion=data_amt)
 
             if log:
                 log_str = log+"-"+str(trial)+"-"+str(data_amt)
             else:
                 log_str = None
 
-            net = OneLayerNet(tasks, trainloader, testloader, 128 * 5 * 5, 3,
-                           log=log_str, cuda=cuda0, blocks=blocks)
+            if sample:
+                net = OneLayerSample(tasks, trainloader, testloader, config=config,
+                                     log=log_str, cuda=cuda0)
+            elif VI:
+                net = OneLayerVI(tasks, trainloader, testloader, config=config,
+                                 log=log_str, cuda=cuda0)
+            elif blending:
+                net = OneLayerBlend(tasks, trainloader, testloader, config=config,
+                               log=log_str, cuda=cuda0)
+            elif individual:
+                net = Individual(tasks, trainloader, testloader, config=config,
+                                    log=log_str, cuda=cuda0)
 
-            net.active_tasks = len(tasks)
             net = net.to(cuda0)
 
-            for i in range(50):
-                net.train_epoch(sample=sample, naive_sample=naive_sample, individual=individual, mixture=mixed, VI=VI, log_interval=int(data_amt * 1600))
-                net.test_overall(sample=sample, naive_sample=naive_sample, individual=individual, mixture=mixed, VI=VI)
-                if i % 20 == 19:
-                    torch.save(net.state_dict(), log+"-"+str(trial)+"-"+str(data_amt)+"-i-"+str(i)+".pt")
+            if local:
+                for i in range(10):
+                    net.train_epoch(log_interval=int(len(trainloader) - 1))
+                    #net.test_overall()
+            else:
+                for i in range(int(100 * 1/data_amt)):
+                    net.train_epoch(log_interval=int(len(trainloader) - 1))
+                    net.test_overall()
+                    if int(i % 20 * 1/data_amt) == int(19 * 1/data_amt):
+                        torch.save(net.state_dict(), log+"-"+str(trial)+"-"+str(data_amt)+"-i-"+str(i)+".pt")
 
 
-#run_test(trials=1, data_amts=[1/258], path="data/celeba", dataset="CelebA", log=None, tasks=celebA_tasks, VI=True, blocks=10)
-#run_test(trials=1, data_amts=[1/64], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, individual=True, blocks=10)
-#run_test(trials=1, data_amts=[1/8], path="data/celeba", dataset="CelebA", log=None, tasks=celebA_tasks, sample=True, blocks=10)
-#run_test(trials=1, data_amts=[1/8], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, naive_sample=True, blocks=10)
-#run_test(trials=1, data_amts=[1/8], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, blocks=10)
+"""
+
+CIFAR TESTS
+
+"""
 
 
-run_test(trials=1, data_amts=[1, 1/8], path="data/celeba", dataset="CelebA", log="logs/sampling/celeb", tasks=celebA_tasks, sample=True, blocks=10)
-run_test(trials=1, data_amts=[1, 1/8], path="data/celeba", dataset="CelebA", log="logs/naive_sampling/celeb", tasks=celebA_tasks, naive_sample=True, blocks=10)
-run_test(trials=1, data_amts=[1, 1/8], path="data/celeba", dataset="CelebA", log="logs/VI/celeb", tasks=celebA_tasks, VI=True, blocks=10)
-run_test(trials=1, data_amts=[1, 1/8], path="data/celeba", dataset="CelebA", log="logs/blending/celeb", tasks=celebA_tasks, blocks=10)
-run_test(trials=1, data_amts=[1, 1/8], path="data/celeba", dataset="CelebA", log="logs/individual/celeb", tasks=celebA_tasks, individual=True, blocks=len(celeb_classes))
+
+config = {
+    "reparam": True,
+    "discrete": True,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 10
+}
+
+run_test(config, trials=1, data_amts=[1/8], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks,
+         VI=True)
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/VI/cifar_rep_disc", tasks=cifar_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar_rep_disc", tasks=cifar_tasks, sample=True)
+
+config = {
+    "reparam": True,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/VI/cifar_rep_nodisc", tasks=cifar_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar_rep_nodisc", tasks=cifar_tasks, sample=True)
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/VI/cifar_score_disc", tasks=cifar_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar_score_disc", tasks=cifar_tasks, sample=True)
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, blending=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/blending/cifar", tasks=cifar_tasks, blending=True)
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 1
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, blending=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/shared/cifar", tasks=cifar_tasks, blending=True)
+
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 20
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/cifar100", dataset="CIFAR100", log=None, tasks=cifar_tasks, individual=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/individual/cifar", tasks=cifar_tasks, individual=True)
+
+
+
+"""
+
+MNIST TESTS
+
+"""
+
+config = {
+    "reparam": True,
+    "discrete": True,
+    "in_channels": 1,
+    "fc_in": 128 * 5 * 5,
+    "options": 7,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/VI/mnist_rep_disc", tasks=mnist_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/sampling/mnist_rep_disc", tasks=mnist_tasks, sample=True)
+
+config = {
+    "reparam": True,
+    "discrete": False,
+    "in_channels": 1,
+    "fc_in": 128 * 5 * 5,
+    "options": 7,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/VI/mnist_rep_nodisc", tasks=mnist_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/sampling/mnist_rep_nodisc", tasks=mnist_tasks, sample=True)
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 1,
+    "fc_in": 128 * 5 * 5,
+    "options": 7,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/VI/mnist_score_disc", tasks=mnist_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/sampling/mnist_score_disc", tasks=mnist_tasks, sample=True)
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, blending=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/blending/mnist", tasks=mnist_tasks, blending=True)
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 1,
+    "fc_in": 128 * 5 * 5,
+    "options": 7,
+    "blocks": 1
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, blending=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/shared/mnist", tasks=mnist_tasks, blending=True)
+
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 1,
+    "fc_in": 128 * 5 * 5,
+    "options": 7,
+    "blocks": 2
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mnist", dataset="MNIST", log=None, tasks=mnist_tasks, individual=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/individual/mnist", tasks=mnist_tasks, individual=True)
+
+
+"""
+
+MITStates
+
+"""
+
+config = {
+    "reparam": True,
+    "discrete": True,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/VI/mitstates_rep_disc", tasks=mitstates_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/sampling/mitstates_rep_disc", tasks=mitstates_tasks, sample=True)
+
+config = {
+    "reparam": True,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/VI/mitstates_rep_nodisc", tasks=mitstates_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/sampling/mitstates_rep_nodisc", tasks=mitstates_tasks, sample=True)
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 10
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, sample=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/VI/mitstates_score_disc", tasks=mitstates_tasks, VI=True)
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/sampling/mitstates_score_disc", tasks=mitstates_tasks, sample=True)
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, blending=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/blending/mitstates", tasks=mitstates_tasks, blending=True)
+
+config = {
+    "reparam": False,
+    "discrete": False,
+    "in_channels": 3,
+    "fc_in": 128 * 5 * 5,
+    "options": 5,
+    "blocks": 1
+}
+
+if local:
+    run_test(config, trials=1, data_amts=[1/128], path="data/mitstates", dataset="MITStates", log=None, tasks=mitstates_tasks, blending=True)
+else:
+    run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/shared/mitstates", tasks=mitstates_tasks, blending=True)

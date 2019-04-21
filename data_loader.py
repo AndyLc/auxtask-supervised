@@ -219,6 +219,7 @@ class Position(Dataset):
 class CIFAR100(Dataset):
     def __init__(self, path, train=True, data_portion=1, transform=None):
         self.data_portion = data_portion
+        self.train = train
         self.dataset = datasets.CIFAR100(root=path, train=train, download=True, transform=transform)
         self.fine_to_coarse = {0: 4, 1: 1, 2: 14, 3: 8, 4: 0, 5: 6, 6: 7, 7: 7, 8: 18, 9: 3, 10: 3, 11: 14, 12: 9, 13: 18, 14: 7, 15: 11, 16: 3, 17: 9, 18: 7, 19: 11, 20: 6, 21: 11, 22: 5, 23: 10, 24: 7, 25: 6, 26: 13, 27: 15, 28: 3, 29: 15, 30: 0, 31: 11, 32: 1, 33: 10, 34: 12, 35: 14, 36: 16, 37: 9, 38: 11, 39: 5, 40: 5, 41: 19, 42: 8, 43: 8, 44: 15, 45: 13, 46: 14, 47: 17, 48: 18, 49: 10, 50: 16, 51: 4, 52: 17, 53: 4, 54: 2, 55: 0, 56: 17, 57: 4, 58: 18, 59: 17, 60: 10, 61: 3, 62: 2, 63: 12, 64: 12, 65: 16, 66: 12, 67: 1, 68: 9, 69: 19, 70: 2, 71: 10, 72: 0, 73: 1, 74: 16, 75: 12, 76: 9, 77: 13, 78: 15, 79: 13, 80: 16, 81: 19, 82: 2, 83: 4, 84: 6, 85: 19, 86: 5, 87: 5, 88: 8, 89: 19, 90: 18, 91: 1, 92: 2, 93: 15, 94: 6, 95: 0, 96: 17, 97: 8, 98: 14, 99: 13}
         self.fine_classes = ['apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 'bicycle',
@@ -241,31 +242,55 @@ class CIFAR100(Dataset):
                          'large omnivores and herbivores', 'medium-sized mammals', 'non-insect invertebrates', 'people',
                          'reptiles', 'small mammals', 'trees', 'vehicles 1', 'vehicles 2']
 
+        if train == True:
+            self.dataset = list(self.dataset)
+            np.random.shuffle(self.dataset)
+
     def __getitem__(self, index):
         data, label = self.dataset.__getitem__(index)
         #inputs, tasks, labels
         return data, torch.tensor(self.fine_to_coarse[label]), torch.tensor(self.fine_to_label[label])
 
     def __len__(self):
-        return int(len(self.dataset) * self.data_portion)
+        if self.train == True:
+            return int(len(self.dataset) * self.data_portion)
+        else:
+            return len(self.dataset)
 
 
 class MNIST(Dataset):
     def __init__(self, path, train=True, data_portion=1, transform=None):
         self.data_portion = data_portion
+        self.train = train
         self.dataset = datasets.MNIST(root=path, train=train, download=True, transform=transform)
 
+        if train == True:
+            self.dataset = list(self.dataset)
+            np.random.shuffle(self.dataset)
+
         self.super_classes = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+        self.class_one = ['zero', 'one', 'two', 'three', 'four', 'five', 'six']
+        self.class_two = ['three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
 
     def __getitem__(self, index):
-        i = index // len(self.super_classes)
-        data, label = self.dataset.__getitem__(i)
-        l = torch.zeros([len(self.super_classes)])
-        l[label] = 1
-        return data, index % len(self.super_classes), torch.tensor([l[index % len(self.super_classes)]])
+        data, label = self.dataset.__getitem__(index)
+        if label <= 2:
+            task = 0
+        elif label >= 7:
+            task = 1
+            label = label - 3
+        else: # 3, 4, 5, 6, shared between the two.
+            task = random.randint(0, 1)
+            if task == 1:
+                label = label - 3
+
+        return data, torch.tensor(task), torch.tensor(label)
 
     def __len__(self):
-        return int(len(self.dataset) * len(self.super_classes) * self.data_portion)
+        if self.train == True:
+            return int(len(self.dataset) * self.data_portion)
+        else:
+            return len(self.dataset)
 
 
 class RegularMNIST(Dataset):
@@ -288,159 +313,139 @@ class RegularMNIST(Dataset):
         else:
             return len(self.dataset)
 
+class MITStates(Dataset):
 
-
-"""
-
-class Superimposed(Dataset):
-    img_size = 32
-    base_folder_cifar = 'cifar-10-batches-py'
-    train_list_cifar = [
-        'data_batch_1',
-        'data_batch_2',
-        'data_batch_3',
-        'data_batch_4',
-        'data_batch_5',
-    ]
-
-    test_list_cifar = [
-        'test_batch',
-    ]
-    meta_cifar = {
-        'filename': 'batches.meta',
-        'key': 'label_names'
-    }
-    training_file_mnist = 'training.pt'
-    test_file_mnist = 'test.pt'
-    mnist_classes = ['0 - zero', '1 - one', '2 - two', '3 - three', '4 - four',
-               '5 - five', '6 - six', '7 - seven', '8 - eight', '9 - nine']
-
-    cifar_mnist_to_num = [[i for i in range(10*j, 10*(j+1))] for j in range(0, 10)]
-
-    cifar_size = 500
-
-    def __init__(self, mnist_root, cifar_root, train=True,
-                 cifar_transform=None, cifar_target_transform=None,
-                 mnist_transform=None, mnist_target_transform=None,
-                 download=False):
-
-        self.mnist_root = os.path.expanduser(mnist_root)
-        self.cifar_root = os.path.expanduser(cifar_root)
+    def __init__(self, path, train=True, data_portion=1, transform=None):
+        super(MITStates, self).__init__()
+        self.path = path
+        self.transform = transform
         self.train = train
-        self.init_cifar(cifar_transform, cifar_target_transform)
-        self.init_mnist(mnist_transform, mnist_target_transform)
-        self.to_tensor = transforms.ToTensor()
-        return
+        self.data_portion = data_portion
 
-    def init_cifar(self, cifar_transform, cifar_target_transform):
-        self.cifar_transform = cifar_transform
-        self.cifar_target_transform = cifar_target_transform
+        self.imgs = []
 
-        if self.train:
-            downloaded_list = self.train_list_cifar
+        self.train_imgs = []
+        self.test_imgs = []
+
+        from os import listdir
+        for f in listdir(path + '/images'):
+            if ' ' not in f:
+                continue
+            adj, noun = f.split()
+
+            for file_path in listdir(path + '/images/' + f):
+                assert (file_path.endswith('jpg'))
+                self.imgs += [{
+                    'file_path': path + '/images/' + f + '/' + file_path,
+                    'captions': [f],
+                    'adj': adj,
+                    'noun': noun
+                }]
+
+        self.caption_index_init_()
+        self.noun_adj_to_label = {}
+        self.noun_adj_to_count = {}
+
+        nouns = list(self.noun2adjs.keys())
+        self.noun_to_i = {nouns[i]: i for i in range(len(self.noun2adjs))}
+
+        for noun, adjs in self.noun2adjs.items():
+            names = list(adjs.keys())
+            counts = list(adjs.values())
+            self.noun_adj_to_label[noun] = {names[i]: i for i in range(len(adjs))}
+            self.noun_adj_to_count[noun] = {names[i]: counts[i] for i in range(len(adjs))}
+
+        seen = {}
+        for img in self.imgs:
+            if img['noun'] in self.noun2adjs and img['adj'] in self.noun2adjs[img['noun']]:
+                if img['noun'] not in seen:
+                    seen[img['noun']] = {}
+                if img['adj'] not in seen[img['noun']]:
+                    seen[img['noun']][img['adj']] = 1
+                else:
+                    seen[img['noun']][img['adj']] += 1
+
+                if seen[img['noun']][img['adj']] <= self.noun_adj_to_count[img['noun']][img['adj']] * 0.8:
+                    self.train_imgs.append(img)
+                else:
+                    self.test_imgs.append(img)
+
+        if train is True:
+            self.imgs = self.train_imgs
+            np.random.shuffle(self.imgs)
         else:
-            downloaded_list = self.test_list_cifar
+            self.imgs = self.test_imgs
 
-        self.cifar_data = []
-        self.cifar_targets = []
+    def __getitem__(self, idx):
+        noun = self.imgs[idx]['noun']
+        adj = self.imgs[idx]['adj']
+        return self.get_img(idx), self.noun_to_i[noun], self.noun_adj_to_label[noun][adj]
 
-        # now load the picked numpy arrays
-        for file_name in downloaded_list:
-            file_path = os.path.join(self.cifar_root, self.base_folder_cifar, file_name)
-            with open(file_path, 'rb') as f:
-                if sys.version_info[0] == 2:
-                    entry = pickle.load(f)
-                else:
-                    entry = pickle.load(f, encoding='latin1')
-
-                self.cifar_data.append(entry['data'])
-
-                if 'labels' in entry:
-                    self.cifar_targets.extend(entry['labels'])
-                else:
-                    self.cifar_targets.extend(entry['fine_labels'])
-
-        self.cifar_data = np.vstack(self.cifar_data).reshape(-1, 3, 32, 32)
-        self.cifar_data = self.cifar_data.transpose((0, 2, 3, 1))  # convert to HWC
-
-        path = os.path.join(self.cifar_root, self.base_folder_cifar, self.meta_cifar['filename'])
-        with open(path, 'rb') as infile:
-            if sys.version_info[0] == 2:
-                data = pickle.load(infile)
+    def caption_index_init_(self):
+        self.caption2imgids = {}
+        self.noun2adjs = {}
+        for i, img in enumerate(self.imgs):
+            cap = img['captions'][0]
+            adj = img['adj']
+            noun = img['noun']
+            if cap not in self.caption2imgids.keys():
+                self.caption2imgids[cap] = []
+            if noun not in self.noun2adjs.keys():
+                self.noun2adjs[noun] = {}
+            self.caption2imgids[cap].append(i)
+            if adj not in self.noun2adjs[noun]:
+                self.noun2adjs[noun][adj] = 1
             else:
-                data = pickle.load(infile, encoding='latin1')
-            self.cifar_classes = data[self.meta_cifar['key']]
-        self.cifar_class_to_idx = {_class: i for i, _class in enumerate(self.cifar_classes)}
+                self.noun2adjs[noun][adj] += 1
 
-    def init_mnist(self, mnist_transform, mnist_target_transform):
-        self.mnist_raw_folder = os.path.join(self.mnist_root, 'raw')
-        self.mnist_processed_folder = os.path.join(self.mnist_root, 'processed')
-        self.mnist_class_to_idx = {_class: i for i, _class in enumerate(self.mnist_classes)}
+        for noun, adjs in self.noun2adjs.items():
+            assert len(adjs) >= 2
 
-        self.mnist_transform = mnist_transform
-        self.mnist_target_transform = mnist_target_transform
-        if self.train:
-            data_file = self.training_file_mnist
-        else:
-            data_file = self.test_file_mnist
+        filtered = {}
+        for noun in self.noun2adjs:
+            if len(self.noun2adjs[noun]) >= 5:
+                filtered[noun] = {k: self.noun2adjs[noun][k] for k in list(self.noun2adjs[noun].keys())[:5]}
 
-        self.mnist_data, self.mnist_targets = torch.load(os.path.join(self.mnist_processed_folder, data_file))
-
-    def __getitem__(self, index):
-
-        cifar_index = index
-        mnist_index = index
-
-        cifar_img, cifar_target = self.cifar_data[cifar_index], self.cifar_targets[cifar_index]
-
-        cifar_img = Image.fromarray(cifar_img)
-
-        if self.cifar_transform is not None:
-            cifar_img = self.cifar_transform(img)
-
-        if self.cifar_target_transform is not None:
-            cifar_target = self.cifar_target_transform(target)
-
-        mnist_img, mnist_target = self.mnist_data[mnist_index], int(self.mnist_targets[mnist_index])
-        mnist_img = Image.fromarray(mnist_img.numpy(), mode='L')
-
-        if self.mnist_transform is not None:
-            mnist_img = self.mnist_transform(mnist_img)
-
-        if self.mnist_target_transform is not None:
-            mnist_target = self.mnist_target_transform(mnist_target)
-
-        #Now we superimpose these images
-        mnist_img = mnist_img.resize((self.img_size,self.img_size), Image.ANTIALIAS)
-        mnist_img = mnist_img.convert("RGB")
-        img = Image.blend(mnist_img, cifar_img, 0.5)
-        target = torch.tensor([cifar_target, mnist_target])
-        return self.to_tensor(img), target
+        self.noun2adjs = filtered
 
     def __len__(self):
-        return int(min(len(self.cifar_data), len(self.mnist_data))/8)
+        if self.train == True:
+            return int(len(self.imgs) * self.data_portion)
+        else:
+            return len(self.imgs)
 
-"""
+    def get_img(self, idx, raw_img=False):
+        img_path = self.imgs[idx]['file_path']
+        with open(img_path, 'rb') as f:
+            img = Image.open(f)
+            img = img.convert('RGB')
+        if raw_img:
+            return img
+        if self.transform:
+            img = self.transform(img)
+        return img
 
-
-def get_loader(path, crop_size=178, image_size=128, batch_size=32, dataset='Superimposed', mode='train', num_workers=2, data_portion=1):
+def get_loader(path, crop_size=178, image_size=32, batch_size=32, dataset='Superimposed', mode='train', num_workers=2, data_portion=1):
     transform = []
-    if mode == 'train':
-        transform.append(T.RandomHorizontalFlip())
-    transform.append(T.CenterCrop(crop_size))
+
+    #if mode == 'train' and dataset != 'MNIST':
+    #    transform.append(T.RandomHorizontalFlip())
+    #transform.append(T.CenterCrop(crop_size))
     transform.append(T.Resize(image_size))
     transform.append(T.ToTensor())
     transform.append(T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
     transform = T.Compose(transform)
     if dataset == 'CelebA':
         dataset = CelebA(path + "/images", path + "/list_attr_celeba.txt",
-                         ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes', 'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair', 'Blurry', 'Brown_Hair', 'Bushy_Eyebrows', 'Chubby', 'Double_Chin', 'Eyeglasses', 'Goatee', 'Gray_Hair', 'Heavy_Makeup', 'High_Cheekbones', 'Male', 'Mouth_Slightly_Open', 'Mustache', 'Narrow_Eyes', 'No_Beard', 'Oval_Face', 'Pale_Skin', 'Pointy_Nose', 'Receding_Hairline', 'Rosy_Cheeks', 'Sideburns', 'Smiling', 'Straight_Hair', 'Wavy_Hair', 'Wearing_Earrings', 'Wearing_Hat', 'Wearing_Lipstick', 'Wearing_Necklace', 'Wearing_Necktie', 'Young'], transform, mode, data_portion=data_portion)
+                         ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive'], transform, mode, data_portion=data_portion)
     elif dataset == 'Superimposed':
         dataset = Position(path, train=(mode=='train'), data_portion=data_portion)
     elif dataset == 'CIFAR100':
         dataset = CIFAR100(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
     elif dataset == 'MNIST':
-        dataset = RegularMNIST(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+        dataset = MNIST(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+    elif dataset == 'MITStates':
+        dataset = MITStates(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
 
 
     data_loader = data.DataLoader(dataset=dataset,
