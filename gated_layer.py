@@ -45,7 +45,7 @@ class SamplingLayer(GatedLayer):
         self.reparam = config["reparam"]
         self.discrete = config["discrete"]
         self.temp = 0.1
-        self.reg = 0.1
+        self.reg = config["reg"]
 
     def get_choices(self, g_logits, q_logits=None):
         if self.training:
@@ -53,18 +53,18 @@ class SamplingLayer(GatedLayer):
                 if not self.discrete:
                     distr = torch.distributions.RelaxedBernoulli(self.temp, logits=g_logits)
                     r = distr.rsample()
-                    sample_penalty = (g_logits * self.reg).sum(dim=1)
+                    sample_penalty = (torch.sigmoid(g_logits) * self.reg).sum(dim=1)
                     return r, 0, sample_penalty
                 else:
                     distr = torch.distributions.RelaxedBernoulli(self.temp, logits=g_logits)
                     r = distr.rsample()
-                    sample_penalty = (g_logits * self.reg).sum(dim=1)
+                    sample_penalty = (torch.sigmoid(g_logits) * self.reg).sum(dim=1)
                     discr = torch.round(r)
                     return r + (discr - r).detach(), 0, sample_penalty
             else:
                 distr = torch.distributions.Bernoulli(logits=g_logits)
                 r = distr.sample()
-                sample_penalty = (g_logits * self.reg).sum(dim=1)
+                sample_penalty = (torch.sigmoid(g_logits) * self.reg).sum(dim=1)
 
                 return r, (F.logsigmoid(g_logits) * r + F.logsigmoid(-g_logits) * (1-r)).sum(dim=1), sample_penalty
         else:
@@ -77,7 +77,7 @@ class VILayer(GatedLayer):
         self.reparam = config["reparam"]
         self.discrete = config["discrete"]
         self.temp = 0.1
-        self.reg = 0.1
+        self.reg = config["reg"]
 
     def get_choices(self, g_logits, q_logits=None):
 
@@ -90,7 +90,7 @@ class VILayer(GatedLayer):
                     distr = torch.distributions.RelaxedBernoulli(self.temp, logits=q_logits)
                     r = distr.rsample()
 
-                    sample_penalty = (q_logits * self.reg).sum(dim=1)
+                    sample_penalty = (torch.sigmoid(q_logits) * self.reg).sum(dim=1)
 
                     prob_one = torch.sigmoid(q_logits) * (F.logsigmoid(q_logits) - F.logsigmoid(g_logits))
                     prob_zero = (1 - torch.sigmoid(q_logits)) * (F.logsigmoid(-q_logits) - F.logsigmoid(-g_logits))
@@ -101,7 +101,7 @@ class VILayer(GatedLayer):
                     r = distr.rsample()
                     discr = torch.round(r)
 
-                    sample_penalty = (q_logits * self.reg).sum(dim=1)
+                    sample_penalty = (torch.sigmoid(q_logits) * self.reg).sum(dim=1)
 
                     prob_one = torch.sigmoid(q_logits) * (F.logsigmoid(q_logits) - F.logsigmoid(g_logits))
                     prob_zero = (1 - torch.sigmoid(q_logits)) * (F.logsigmoid(-q_logits) - F.logsigmoid(-g_logits))
@@ -113,7 +113,7 @@ class VILayer(GatedLayer):
                 log_q_prob = F.logsigmoid(q_logits) * r + F.logsigmoid(-q_logits) * (1 - r)
                 log_p_prob = F.logsigmoid(g_logits) * r + F.logsigmoid(-g_logits) * (1 - r)
 
-                sample_penalty = (q_logits * self.reg).sum(dim=1)
+                sample_penalty = (torch.sigmoid(q_logits) * self.reg).sum(dim=1)
 
                 return r, log_q_prob.sum(dim=1), ((-log_p_prob + log_q_prob).detach() * log_q_prob - log_p_prob).sum(dim=1) + sample_penalty
         else:
