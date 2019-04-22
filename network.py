@@ -18,6 +18,7 @@ class Network(nn.Module):
         self.tasks = tasks
         self.trainloader = trainloader
         self.testloader = testloader
+        self.reg = config["reg"]
         self.in_channels = config["in_channels"]
         self.blocks = config["blocks"]
         self.fc_in = config["fc_in"]
@@ -51,8 +52,9 @@ class Network(nn.Module):
                     tasks = tasks.cuda(self.cuda)
 
             tasks = tasks[:, None]
-            task_labels = torch.stack([torch.tensor(self.tasks[tasks[l]].label_to_task(l), dtype=torch.long) for l in labels])
+            task_labels = torch.stack([torch.tensor(self.tasks[tasks[l]].label_to_task(labels[l]), dtype=torch.long) for l in range(len(labels))])
             task_labels = task_labels[:, None]
+
             if self.cuda is not None:
                 task_labels = task_labels.cuda(self.cuda)
 

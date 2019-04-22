@@ -111,7 +111,7 @@ def run_test(config, trials=1, data_amts=[1], path="data/cifar100", dataset="CIF
                     net.train_epoch(log_interval=int(len(trainloader) - 1))
                     #net.test_overall()
             else:
-                for i in range(int(100 * 1/data_amt)):
+                for i in range(int(100)):
                     net.train_epoch(log_interval=int(len(trainloader) - 1))
                     net.test_overall()
                     if int(i % 20 * 1/data_amt) == int(19 * 1/data_amt):
@@ -124,9 +124,10 @@ CIFAR TESTS
 
 """
 
-
+"""
 
 config = {
+    "reg": 0.01,
     "reparam": True,
     "discrete": True,
     "in_channels": 3,
@@ -145,6 +146,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar_rep_disc", tasks=cifar_tasks, sample=True)
 
 config = {
+    "reg": 0.01,
     "reparam": True,
     "discrete": False,
     "in_channels": 3,
@@ -161,6 +163,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/sampling/cifar_rep_nodisc", tasks=cifar_tasks, sample=True)
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 3,
@@ -182,6 +185,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/blending/cifar", tasks=cifar_tasks, blending=True)
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 3,
@@ -197,6 +201,7 @@ else:
 
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 3,
@@ -210,7 +215,7 @@ if local:
 else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/cifar100", dataset="CIFAR100", log="logs/individual/cifar", tasks=cifar_tasks, individual=True)
 
-
+"""
 
 """
 
@@ -218,7 +223,10 @@ MNIST TESTS
 
 """
 
+"""
+
 config = {
+    "reg": 0.01,
     "reparam": True,
     "discrete": True,
     "in_channels": 1,
@@ -235,6 +243,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/sampling/mnist_rep_disc", tasks=mnist_tasks, sample=True)
 
 config = {
+    "reg": 0.01,
     "reparam": True,
     "discrete": False,
     "in_channels": 1,
@@ -251,6 +260,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/sampling/mnist_rep_nodisc", tasks=mnist_tasks, sample=True)
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 1,
@@ -272,6 +282,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/blending/mnist", tasks=mnist_tasks, blending=True)
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 1,
@@ -287,6 +298,7 @@ else:
 
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 1,
@@ -300,7 +312,7 @@ if local:
 else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mnist", dataset="MNIST", log="logs/individual/mnist", tasks=mnist_tasks, individual=True)
 
-
+"""
 """
 
 MITStates
@@ -308,6 +320,7 @@ MITStates
 """
 
 config = {
+    "reg": 0.01,
     "reparam": True,
     "discrete": True,
     "in_channels": 3,
@@ -324,6 +337,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/sampling/mitstates_rep_disc", tasks=mitstates_tasks, sample=True)
 
 config = {
+    "reg": 0.01,
     "reparam": True,
     "discrete": False,
     "in_channels": 3,
@@ -340,6 +354,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/sampling/mitstates_rep_nodisc", tasks=mitstates_tasks, sample=True)
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 3,
@@ -361,6 +376,7 @@ else:
     run_test(config, trials=1, data_amts=[1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64], path="data/mitstates", dataset="MITStates", log="logs/blending/mitstates", tasks=mitstates_tasks, blending=True)
 
 config = {
+    "reg": 0.01,
     "reparam": False,
     "discrete": False,
     "in_channels": 3,
