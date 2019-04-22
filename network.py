@@ -303,9 +303,7 @@ class OneLayer(Network):
             extra_loss = extra_loss.reshape(-1, 1)
 
         loss = self.criterion(results, labels).reshape(-1, 1)
-        detached_loss = self.criterion(results, labels).reshape(-1, 1).detach()
-        losses = (loss + (detached_loss * log_probs) + extra_loss).mean(dim=0).reshape(-1)
-        return losses
+        return (loss + (loss.detach() * log_probs) + extra_loss).mean(dim=0)
 
 class OneLayerBlend(OneLayer):
     def __init__(self, tasks, trainloader, testloader, config=None, log=None, cuda=None):
