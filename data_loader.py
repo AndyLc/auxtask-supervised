@@ -10,6 +10,7 @@ import torch
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.data.dataset import Dataset
+from os import listdir
 
 if sys.version_info[0] == 2:
     import cPickle as pickle
@@ -217,7 +218,9 @@ class Position(Dataset):
         return int(len(self.data) * self.data_portion)
 
 class CIFAR100(Dataset):
-    def __init__(self, path, train=True, data_portion=1, transform=None):
+    def __init__(self, path, mode='train', data_portion=1, transform=None):
+        train = (mode == 'train' or mode == 'valid')
+        valid = (mode == 'valid')
         self.data_portion = data_portion
         self.train = train
         self.dataset = datasets.CIFAR100(root=path, train=train, download=True, transform=transform)
@@ -242,9 +245,10 @@ class CIFAR100(Dataset):
                          'large omnivores and herbivores', 'medium-sized mammals', 'non-insect invertebrates', 'people',
                          'reptiles', 'small mammals', 'trees', 'vehicles 1', 'vehicles 2']
 
-        if train == True:
-            self.dataset = list(self.dataset)
-            np.random.shuffle(self.dataset)
+        if valid:
+            self.dataset = list(self.dataset)[45000:]
+        else:
+            self.dataset = list(self.dataset)[:45000]
 
     def __getitem__(self, index):
         data, label = self.dataset.__getitem__(index)
@@ -252,19 +256,16 @@ class CIFAR100(Dataset):
         return data, torch.tensor(self.fine_to_coarse[label]), torch.tensor(self.fine_to_label[label])
 
     def __len__(self):
-        if self.train == True:
-            return int(len(self.dataset) * self.data_portion)
-        else:
-            return len(self.dataset)
-
+        return int(len(self.dataset) * self.data_portion)
 
 class MNIST(Dataset):
-    def __init__(self, path, train=True, data_portion=1, transform=None):
+    def __init__(self, path, mode=None, data_portion=1, transform=None):
         self.data_portion = data_portion
-        self.train = train
-        self.dataset = datasets.MNIST(root=path, train=train, download=True, transform=transform)
+        self.train = (mode == 'train' or mode == 'valid')
+        valid = (mode == 'valid')
+        self.dataset = datasets.MNIST(root=path, train=self.train, download=True, transform=transform)
 
-        if train == True:
+        if self.train == True:
             self.dataset = list(self.dataset)
             np.random.shuffle(self.dataset)
 
@@ -292,20 +293,31 @@ class MNIST(Dataset):
         else:
             return len(self.dataset)
 
-
 class RegularMNIST(Dataset):
-    def __init__(self, path, train=True, data_portion=1, transform=None):
-        self.train = train
+    def __init__(self, path, mode=None, data_portion=1, transform=None):
         self.data_portion = data_portion
-        self.dataset = datasets.MNIST(root=path, train=train, download=True, transform=transform)
+        self.train = (mode == 'train' or mode == 'valid')
+        valid = (mode == 'valid')
+        self.dataset = datasets.MNIST(root=path, train=self.train, download=True, transform=transform)
+
+        if self.train == True:
+            self.dataset = list(self.dataset)
+            np.random.shuffle(self.dataset)
+
         self.super_classes = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+        self.class_one = ['zero', 'one', 'two', 'three', 'four', 'five', 'six']
+        self.class_two = ['three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
 
     def __getitem__(self, index):
-        i = index // len(self.super_classes)
-        data, label = self.dataset.__getitem__(i)
-        l = torch.zeros([len(self.super_classes)])
-        l[label] = 1
-        return data, l
+        data, label = self.dataset.__getitem__(index)
+
+        task = random.randint(0, 9)
+        if task == label:
+            label = 1
+        else:
+            label = 0
+
+        return data, torch.tensor(task), torch.tensor(label)
 
     def __len__(self):
         if self.train == True:
@@ -315,8 +327,10 @@ class RegularMNIST(Dataset):
 
 class MITStates(Dataset):
 
-    def __init__(self, path, train=True, data_portion=1, transform=None):
+    def __init__(self, path, mode=None, data_portion=1, transform=None):
         super(MITStates, self).__init__()
+        train = (mode == 'train' or mode == 'valid')
+        valid = (mode == 'valid')
         self.path = path
         self.transform = transform
         self.train = train
@@ -327,7 +341,7 @@ class MITStates(Dataset):
         self.train_imgs = []
         self.test_imgs = []
 
-        from os import listdir
+
         for f in listdir(path + '/images'):
             if ' ' not in f:
                 continue
@@ -425,12 +439,92 @@ class MITStates(Dataset):
             img = self.transform(img)
         return img
 
-def get_loader(path, crop_size=178, image_size=32, batch_size=32, dataset='Superimposed', mode='train', num_workers=2, data_portion=1):
-    transform = []
+class OfficeHome(Dataset):
+    def __init__(self, path, mode=None, data_portion=1, transform=None):
+        super(OfficeHome, self).__init__()
+        train = (mode == 'train' or mode == 'valid')
+        valid = (mode == 'valid')
+        self.path = path
+        self.transform = transform
+        self.train = train
+        self.data_portion = data_portion
 
-    #if mode == 'train' and dataset != 'MNIST':
-    #    transform.append(T.RandomHorizontalFlip())
-    #transform.append(T.CenterCrop(crop_size))
+        self.imgs = []
+        self.test_imgs = []
+        self.train_imgs = []
+
+        self.cat_noun_to_label = {'Art': {'Helmet': 0, 'Drill': 1, 'Exit_Sign': 2, 'Fork': 3, 'Hammer': 4, 'Screwdriver': 5, 'Bed': 6, 'Monitor': 7, 'Calendar': 8, 'Radio': 9, 'Calculator': 10, 'Push_Pin': 11, 'Desk_Lamp': 12, 'Eraser': 13, 'Alarm_Clock': 14, 'Toys': 15, 'Postit_Notes': 16, 'Couch': 17, 'Speaker': 18, 'Sneakers': 19, 'Batteries': 20, 'Bike': 21, 'Trash_Can': 22, 'Printer': 23, 'Folder': 24, 'Flowers': 25, 'Lamp_Shade': 26, 'Oven': 27, 'Chair': 28, 'Sink': 29, 'Curtains': 30, 'Knives': 31, 'Clipboards': 32, 'Soda': 33, 'TV': 34, 'Glasses': 35, 'File_Cabinet': 36, 'Telephone': 37, 'Mouse': 38, 'Pen': 39, 'Kettle': 40, 'Bucket': 41, 'Candles': 42, 'Table': 43, 'Ruler': 44, 'Mug': 45, 'Flipflops': 46, 'Spoon': 47, 'Scissors': 48, 'Fan': 49, 'Shelf': 50, 'Backpack': 51, 'Notebook': 52, 'Laptop': 53, 'Marker': 54, 'Paper_Clip': 55, 'Computer': 56, 'Refrigerator': 57, 'ToothBrush': 58, 'Webcam': 59, 'Mop': 60, 'Bottle': 61, 'Pan': 62, 'Pencil': 63, 'Keyboard': 64}, 'Real World': {'Helmet': 65, 'Drill': 66, 'Exit_Sign': 67, 'Fork': 68, 'Hammer': 69, 'Screwdriver': 70, 'Bed': 71, 'Monitor': 72, 'Calendar': 73, 'Radio': 74, 'Calculator': 75, 'Push_Pin': 76, 'Desk_Lamp': 77, 'Eraser': 78, 'Alarm_Clock': 79, 'Toys': 80, 'Postit_Notes': 81, 'Couch': 82, 'Speaker': 83, 'Sneakers': 84, 'Batteries': 85, 'Bike': 86, 'Trash_Can': 87, 'Printer': 88, 'Folder': 89, 'Flowers': 90, 'Lamp_Shade': 91, 'Oven': 92, 'Chair': 93, 'Sink': 94, 'Curtains': 95, 'Knives': 96, 'Clipboards': 97, 'Soda': 98, 'TV': 99, 'Glasses': 100, 'File_Cabinet': 101, 'Telephone': 102, 'Mouse': 103, 'Pen': 104, 'Kettle': 105, 'Bucket': 106, 'Candles': 107, 'Table': 108, 'Ruler': 109, 'Mug': 110, 'Flipflops': 111, 'Spoon': 112, 'Scissors': 113, 'Fan': 114, 'Shelf': 115, 'Backpack': 116, 'Notebook': 117, 'Laptop': 118, 'Marker': 119, 'Paper_Clip': 120, 'Computer': 121, 'Refrigerator': 122, 'ToothBrush': 123, 'Webcam': 124, 'Mop': 125, 'Bottle': 126, 'Pan': 127, 'Pencil': 128, 'Keyboard': 129}, 'Product': {'Helmet': 130, 'Drill': 131, 'Exit_Sign': 132, 'Fork': 133, 'Hammer': 134, 'Screwdriver': 135, 'Bed': 136, 'Monitor': 137, 'Calendar': 138, 'Radio': 139, 'Calculator': 140, 'Push_Pin': 141, 'Desk_Lamp': 142, 'Eraser': 143, 'Alarm_Clock': 144, 'Toys': 145, 'Postit_Notes': 146, 'Couch': 147, 'Speaker': 148, 'Sneakers': 149, 'Batteries': 150, 'Bike': 151, 'Trash_Can': 152, 'Printer': 153, 'Folder': 154, 'Flowers': 155, 'Lamp_Shade': 156, 'Oven': 157, 'Chair': 158, 'Sink': 159, 'Curtains': 160, 'Knives': 161, 'Clipboards': 162, 'Soda': 163, 'TV': 164, 'Glasses': 165, 'File_Cabinet': 166, 'Telephone': 167, 'Mouse': 168, 'Pen': 169, 'Kettle': 170, 'Bucket': 171, 'Candles': 172, 'Table': 173, 'Ruler': 174, 'Mug': 175, 'Flipflops': 176, 'Spoon': 177, 'Scissors': 178, 'Fan': 179, 'Shelf': 180, 'Backpack': 181, 'Notebook': 182, 'Laptop': 183, 'Marker': 184, 'Paper_Clip': 185, 'Computer': 186, 'Refrigerator': 187, 'ToothBrush': 188, 'Webcam': 189, 'Mop': 190, 'Bottle': 191, 'Pan': 192, 'Pencil': 193, 'Keyboard': 194}, 'Clipart': {'Helmet': 195, 'Drill': 196, 'Exit_Sign': 197, 'Fork': 198, 'Hammer': 199, 'Screwdriver': 200, 'Bed': 201, 'Monitor': 202, 'Calendar': 203, 'Radio': 204, 'Calculator': 205, 'Push_Pin': 206, 'Desk_Lamp': 207, 'Eraser': 208, 'Alarm_Clock': 209, 'Toys': 210, 'Postit_Notes': 211, 'Couch': 212, 'Speaker': 213, 'Sneakers': 214, 'Batteries': 215, 'Bike': 216, 'Trash_Can': 217, 'Printer': 218, 'Folder': 219, 'Flowers': 220, 'Lamp_Shade': 221, 'Oven': 222, 'Chair': 223, 'Sink': 224, 'Curtains': 225, 'Knives': 226, 'Clipboards': 227, 'Soda': 228, 'TV': 229, 'Glasses': 230, 'File_Cabinet': 231, 'Telephone': 232, 'Mouse': 233, 'Pen': 234, 'Kettle': 235, 'Bucket': 236, 'Candles': 237, 'Table': 238, 'Ruler': 239, 'Mug': 240, 'Flipflops': 241, 'Spoon': 242, 'Scissors': 243, 'Fan': 244, 'Shelf': 245, 'Backpack': 246, 'Notebook': 247, 'Laptop': 248, 'Marker': 249, 'Paper_Clip': 250, 'Computer': 251, 'Refrigerator': 252, 'ToothBrush': 253, 'Webcam': 254, 'Mop': 255, 'Bottle': 256, 'Pan': 257, 'Pencil': 258, 'Keyboard': 259}}
+
+        # self.cat_noun_to_label = {}
+
+        id = 0
+        for f in listdir(path):
+            if f in ["Art", "Clipart", "Product", "Real World"]:
+                category = f
+                train_split = len(listdir(path + "/" + f)) * 0.8
+                for fo in listdir(path + "/" + f):
+                    count = 0
+                    if "." not in fo:
+                        obj = fo
+
+                        for file_path in listdir(path + "/" + f + "/" + fo):
+                            count += 1
+                            if count < train_split:
+                                self.train_imgs += [{
+                                    'file_path': path + "/" + f + '/' + fo + '/' + file_path,
+                                    'category': category,
+                                    'obj': obj,
+                                    'task': self.cat_noun_to_label[category][obj]
+                                }]
+                            else:
+                                self.test_imgs += [{
+                                    'file_path': path + "/" + f + '/' + fo + '/' + file_path,
+                                    'category': category,
+                                    'obj': obj,
+                                    'task': self.cat_noun_to_label[category][obj]
+                                }]
+
+        if train is True:
+            self.imgs = self.train_imgs
+            np.random.shuffle(self.imgs)
+        else:
+            self.imgs = self.test_imgs
+
+    def __getitem__(self, idx):
+        cat = self.imgs[idx]['category']
+        obj = self.imgs[idx]['obj']
+
+        if np.random.rand(1) < 0.5:
+            label = torch.tensor(0)
+            task = np.random.randint(260)
+            while task == self.cat_noun_to_label[cat][obj]:
+                task = np.random.randint(260)
+            task = torch.tensor(task)
+        else:
+            label = torch.tensor(int(self.cat_noun_to_label[cat][obj] == self.imgs[idx]['task']))
+            task = torch.tensor(self.cat_noun_to_label[cat][obj])
+
+        return self.get_img(idx), task, label
+
+    def __len__(self):
+        return int(len(self.imgs) * self.data_portion)
+
+    def get_img(self, idx):
+        img_path = self.imgs[idx]['file_path']
+        with open(img_path, 'rb') as f:
+            img = Image.open(f)
+            img = img.convert('RGB')
+
+        if self.transform:
+            img = self.transform(img)
+        return img
+
+
+
+def get_loader(path, crop_size=128, image_size=32, batch_size=32, dataset='Superimposed', mode='train', num_workers=2, data_portion=1):
+    transform = []
+    transform.append(T.Resize((crop_size, crop_size)))
+    transform.append(T.CenterCrop(crop_size))
     transform.append(T.Resize(image_size))
     transform.append(T.ToTensor())
     transform.append(T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
@@ -439,13 +533,15 @@ def get_loader(path, crop_size=178, image_size=32, batch_size=32, dataset='Super
         dataset = CelebA(path + "/images", path + "/list_attr_celeba.txt",
                          ['5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive'], transform, mode, data_portion=data_portion)
     elif dataset == 'Superimposed':
-        dataset = Position(path, train=(mode=='train'), data_portion=data_portion)
+        dataset = Position(path, mode=mode, data_portion=data_portion)
     elif dataset == 'CIFAR100':
-        dataset = CIFAR100(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+        dataset = CIFAR100(path, mode=mode, data_portion=data_portion, transform=transform)
     elif dataset == 'MNIST':
-        dataset = MNIST(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+        dataset = RegularMNIST(path, mode=mode, data_portion=data_portion, transform=transform)
     elif dataset == 'MITStates':
-        dataset = MITStates(path, train=(mode=='train'), data_portion=data_portion, transform=transform)
+        dataset = MITStates(path, mode=mode, data_portion=data_portion, transform=transform)
+    elif dataset == 'OfficeHome':
+        dataset = OfficeHome(path, mode=mode, data_portion=data_portion, transform=transform)
 
 
     data_loader = data.DataLoader(dataset=dataset,

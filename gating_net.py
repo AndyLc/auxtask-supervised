@@ -9,8 +9,7 @@ from torch.distributions import normal
 class GatingNet(nn.Module):
     def __init__(self, cuda=None, tasks=None, blocks=3):
         super(GatingNet, self).__init__()
-        if self.active_tasks != 1:
-            self.active_tasks = len(self.tasks)
+        self.active_tasks = 1
         self.cuda = cuda
         self.blocks = blocks
         self.normal = normal.Normal(0.0, 0.0001)
@@ -93,8 +92,7 @@ class GatingNet(nn.Module):
                      range(self.blocks)]).sum()))
         else:  # blend/individual
             outputs = self(inputs, tasks=tasks, naive_sample=naive_sample, sample=sample, individual=individual, mixture=mixture, VI=VI)
-            losses = [self.criterion(out, label) for out, label in zip(outputs, task_labels)]
-
+            losses = [self.criterion(out, label).mean() for out, label in zip(outputs, task_labels)]
         return losses
 
 
@@ -114,6 +112,8 @@ class GatingNet(nn.Module):
             if self.cuda is not None:
                 inputs = inputs.cuda(self.cuda)
                 labels = labels.cuda(self.cuda)
+                if tasks is not None:
+                    tasks = tasks.cuda(self.cuda)
 
             task_labels = [torch.tensor([self.tasks[t].label_to_task(l) for l in labels], dtype=torch.long) for t in range(self.active_tasks)]
 
@@ -230,11 +230,11 @@ class GatingNet(nn.Module):
                 if tasks is not None:
                     for i in range(len(tasks)):
                         total_arr[tasks[i]] += 1
-                        correct_arr[tasks[i]] += float(predicted[i] == task_labels[0][i])
+                        correct_arr[tasks[i]] += float(predicted[tasks[i]][i] == task_labels[tasks[i]][i])
                 else:
                     for t in range(len(self.tasks)):
                         total_arr[t] += len(predicted[t])
-                        correct_arr[t] += np.sum(np.array(predicted[t]) == np.array(task_labels[t]))
+                        correct_arr[t] += float(torch.sum(predicted[t] == task_labels[t]))
 
         #total_losses = total_losses / i
 
@@ -383,22 +383,6 @@ class GatingNet(nn.Module):
             fc_ins = [(stack * g.view(-1, 1)).sum(dim=1) for g in gates]
 
         fc_outs = torch.stack([self.fcs[i](fc_ins[i]) for i in range(len(self.tasks))])
-
-        if tasks is not None:
-            task_outs = []
-            # for each batch elem in fc_outs, pick the one that is relevant.
-
-            for e in range(fc_outs.shape[2]):
-                task_outs.append(fc_outs[tasks[e], :, e, :])
-
-            fc_outs = torch.stack(task_outs, dim=1)[None]
-
-
-        #sample and output
-        #if test == False:
-        #    for i in range(len(gates)):
-        #        gates[i].register_hook(self.log_assign(i))
-        #        self.gate_count_log[i] += 1
 
         if naive_sample:
             return fc_outs, probs
@@ -863,6 +847,7 @@ class OneLayerNet(GatingNet):
         self.conv_noise = conv_noise
         self.gate_noise = gate_noise
 
+        """
         self.convolutions = nn.ModuleList([nn.Sequential(
             nn.Conv2d(in_channels, 64, 3),
             nn.ReLU(),
@@ -887,34 +872,33 @@ class OneLayerNet(GatingNet):
             nn.BatchNorm2d(32),
             Flatten()
         ) for _ in range(self.blocks)])
-        """
+
+
 
         self.fc_layer1 = nn.ModuleList([nn.Sequential(
-            nn.Linear(self.fc_out, 64),
+            nn.Linear(self.fc_out, 16),
             nn.ReLU()
         ) for _ in range(len(self.tasks))])
 
+        """
         self.fc_layer2 = nn.ModuleList([nn.Sequential(
             nn.Linear(64, 64),
             nn.ReLU()
         ) for _ in range(len(self.tasks))])
+        """
 
         self.fc_layer3 = nn.ModuleList([nn.Sequential(
-            nn.Linear(64, tasks[i].size)
+            nn.Linear(16, tasks[i].size)
         ) for i in range(len(self.tasks))])
 
         self.g_logits1 = nn.Parameter(torch.zeros([len(self.tasks), self.blocks]))
-        self.q_logits1 = nn.Parameter(torch.zeros([len(self.tasks), 2, self.blocks]))
+        self.q_logits1 = nn.Parameter(torch.zeros([len(self.tasks), 5, self.blocks]))
 
         self.setup(layered=True)
 
     def forward(self, img, tasks=None, test=False, sample=False, naive_sample=False, mixture=False,
                 individual=False,
                 VI=False, labels=None):
-
-        #layers = [self.fc_layer2, self.fc_layer3]
-        #g_logits = [self.g_logits1, self.g_logits2, self.g_logits3]
-
         blocks = torch.stack([self.convolutions[i](img) for i in range(len(self.convolutions))], dim=0)
 
         if self.training:
@@ -925,13 +909,11 @@ class OneLayerNet(GatingNet):
 
             for layer in [self.fc_layer1]:
                 if individual or not (sample or naive_sample or VI):
-                    # print(blocks.shape)
                     blocks = torch.stack([layer[i](blocks[i]) for i in range(len(layer))], dim=0)
                 else:
-                    # print(blocks.shape)
                     blocks = torch.stack([layer[i](blocks) for i in range(len(layer))], dim=0)
 
-            for layer in [self.fc_layer2, self.fc_layer3]:
+            for layer in [self.fc_layer3]:
                 blocks = torch.stack([layer[i](blocks[i]) for i in range(len(layer))], dim=0)
 
 
@@ -941,11 +923,19 @@ class OneLayerNet(GatingNet):
                 gates = [nn.functional.softmax(self.g_logits1[i], dim=0) for i in range(len(self.g_logits1))]
                 blocks = torch.stack([(stack * g.view(-1, 1)).sum(dim=1) for g in gates])
             elif not individual:
-                dim1 = torch.distributions.OneHotCategorical(logits=self.g_logits1).sample([blocks.shape[1]])
+                #dim1 = torch.distributions.OneHotCategorical(logits=self.g_logits1).sample([blocks.shape[1]])
+                dim1 = torch.argmax(self.g_logits1, dim=1, keepdim=True)
+                mask = torch.zeros(self.g_logits1.shape[0], self.g_logits1.shape[1])
+                if self.cuda is not None:
+                    mask = mask.cuda(self.cuda)
+
+                dim1 = mask.scatter_(1, dim1, 1)
+
                 blocks = blocks[None]
-                blocks = blocks * dim1[:, :, :, None].permute(1, 2, 0, 3)
+                blocks = blocks * dim1[:, :, None, None]
                 blocks = blocks.sum(1)
-            for layer in [self.fc_layer1, self.fc_layer2, self.fc_layer3]:
+
+            for layer in [self.fc_layer1, self.fc_layer3]:
                 blocks = torch.stack([layer[i](blocks[i]) for i in range(len(layer))], dim=0)
 
         return blocks
@@ -968,8 +958,18 @@ class OneLayerNet(GatingNet):
 
             #N x d1 x d2
             labels = torch.stack(task_labels, dim=1)[:,:,None].expand(-1, -1, self.blocks)
-            loss = (self.criterion(outputs, labels).sum(dim=0) * soft_matrix).sum(dim=1)
-            losses += loss
+
+            if tasks is not None:
+                loss_mat = (self.criterion(outputs, labels) * soft_matrix).sum(dim=2)
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
+
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                loss = (self.criterion(outputs, labels).mean(dim=0) * soft_matrix).sum(dim=1)
+                losses += loss
 
         elif sample:
 
@@ -980,8 +980,18 @@ class OneLayerNet(GatingNet):
 
             # N x d1 x d2
             labels = torch.stack(task_labels, dim=1)[:, :, None].expand(-1, -1, self.blocks)
-            loss = -(-self.criterion(outputs, labels) + soft_log_matrix).logsumexp(dim=2).sum(0)
-            losses += loss
+
+            if tasks is not None:
+                loss_mat = (-(-self.criterion(outputs, labels) + soft_log_matrix).logsumexp(dim=2))
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
+
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                loss = (-(-self.criterion(outputs, labels) + soft_log_matrix).logsumexp(dim=2)).mean(0)
+                losses += loss
 
         elif VI:
 
@@ -1002,14 +1012,180 @@ class OneLayerNet(GatingNet):
             # N x d1 x d2
             labels = task_labels[:, :, None].expand(-1, -1, self.blocks)
 
-            loss = ((self.criterion(outputs, labels) - log_p_matrix + log_q_matrix) * q_matrix).sum(dim=0).sum(dim=1)
+            if tasks is not None:
+                loss_mat = ((self.criterion(outputs, labels) - log_p_matrix + log_q_matrix) * q_matrix).sum(dim=2)
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
 
-            losses += loss
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                loss = ((self.criterion(outputs, labels) - log_p_matrix + log_q_matrix) * q_matrix).mean(dim=0).sum(dim=1)
+                losses += loss
 
         else:  # blend/individual
             outputs = outputs.permute(1, 2, 0)
             labels = torch.stack(task_labels, dim=1)
 
-            losses += self.criterion(outputs, labels).sum(0)
+            if tasks is not None:
+                loss_mat = self.criterion(outputs, labels)
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
+
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                losses += self.criterion(outputs, labels).mean(0)
+
+        return losses
+
+
+
+
+class SampledOneLayerNet(GatingNet):
+    def __init__(self, tasks, trainloader, testloader, fc_out, in_channels, log=None, cuda=None, conv_noise=False, gate_noise=False, blocks=3):
+        self.active_tasks = 1
+        super(SampledOneLayerNet, self).__init__(cuda=cuda, tasks=tasks, blocks=blocks)
+        self.trainloader = trainloader
+        self.testloader = testloader
+        self.log = log
+        self.fc_out = fc_out
+        self.conv_noise = conv_noise
+        self.gate_noise = gate_noise
+
+        self.convolutions = nn.ModuleList([nn.Sequential(
+            SimpleConvNetBlock(in_channels, 32, 3),
+            SimpleConvNetBlock(32, 32, 3),
+            SimpleConvNetBlock(32, 32, 3),
+            SimpleConvNetBlock(32, 32, 3),
+            nn.BatchNorm2d(32),
+            Flatten()
+        ) for _ in range(self.blocks)])
+
+
+
+        self.fc_layer1 = nn.ModuleList([nn.Sequential(
+            nn.Linear(self.fc_out, 16),
+            nn.ReLU()
+        ) for _ in range(len(self.tasks))])
+
+        self.fc_layer3 = nn.ModuleList([nn.Sequential(
+            nn.Linear(16, tasks[i].size)
+        ) for i in range(len(self.tasks))])
+
+        self.g_logits1 = nn.Parameter(torch.zeros([len(self.tasks), self.blocks]))
+        self.q_logits1 = nn.Parameter(torch.zeros([len(self.tasks), 5, self.blocks]))
+
+        self.setup(layered=True)
+
+    def forward(self, img, tasks=None, test=False, sample=False, naive_sample=False, mixture=False,
+                individual=False,
+                VI=False, labels=None):
+
+        if self.training:
+            dim1 = torch.distributions.Categorical(logits=self.g_logits1).sample([img.shape[0], self.num_samples])
+            dim1 = dim1.permute(0, 2, 1) #batch_s x tasks x samples
+        else:
+            dim1 = torch.argmax(self.g_logits1, dim=1, keepdim=True)
+
+        b_map = {}
+        for b_index in torch.unique(dim1):
+            b_map[int(b_index)] = self.convolutions[b_index](img)
+
+
+        #how can you do this in pytorch without looping which is suboptimal???
+
+
+        for layer in [self.fc_layer1, self.fc_layer3]:
+            blocks = torch.stack([layer[i](blocks[i]) for i in range(len(layer))], dim=0)
+
+        return blocks
+
+    def get_losses(self, inputs, task_labels, tasks=None, naive_sample=False, sample=False, individual=False,
+                   mixture=False, VI=False):
+        outputs = self(inputs, naive_sample=naive_sample, sample=sample, individual=individual,
+                       mixture=mixture, VI=VI)
+
+        losses = torch.zeros(len(self.tasks))
+        log_probs = torch.zeros(32, self.num_samples)
+
+        if self.cuda is not None:
+            losses = losses.cuda(self.cuda)
+            log_probs = log_probs.cuda(self.cuda)
+
+        if naive_sample:
+
+            soft_matrix = F.softmax(self.g_logits1, dim=1)
+            #put the batch size, answer first N x C x d1 x d2
+            outputs = outputs.permute(2, 3, 0, 1)
+
+            #N x d1 x d2
+            labels = torch.stack(task_labels, dim=1)[:,:,None].expand(-1, -1, self.blocks)
+
+            if tasks is not None:
+                loss_mat = (self.criterion(outputs, labels) * soft_matrix).sum(dim=2)
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
+
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                loss = (self.criterion(outputs, labels).mean(dim=0) * soft_matrix).sum(dim=1)
+                losses += loss
+
+        elif sample:
+
+            soft_log_matrix = F.log_softmax(self.g_logits1, dim=1)
+
+            # put the batch size, answer first N x C x d1 x d2
+            outputs = outputs.permute(2, 3, 0, 1)
+
+            # N x d1 x d2
+            labels = torch.stack(task_labels, dim=1)[:, :, None].expand(-1, -1, self.blocks)
+
+            if tasks is not None:
+                loss_mat = (-(-self.criterion(outputs, labels) + soft_log_matrix).logsumexp(dim=2))
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
+
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                loss = (-(-self.criterion(outputs, labels) + soft_log_matrix).logsumexp(dim=2)).mean(0)
+                losses += loss
+
+        elif VI:
+            log_p_matrix = F.log_softmax(self.g_logits1, dim=1)
+            log_q_matrix = F.log_softmax(self.q_logits1, dim=2)
+            q_matrix = F.softmax(self.q_logits1, dim=2)
+
+            task_labels = torch.stack(task_labels, dim=1)
+            log_q_matrix = log_q_matrix[None].expand(task_labels.shape[0], -1, -1, -1)
+            log_q_matrix = torch.gather(log_q_matrix, 2, task_labels[:, :, None, None].expand(-1, -1, 1, self.blocks)).sum(2)
+
+            q_matrix = q_matrix[None].expand(task_labels.shape[0], -1, -1, -1)
+            q_matrix = torch.gather(q_matrix, 2, task_labels[:, :, None, None].expand(-1, -1, 1, self.blocks)).sum(2)
+
+            # put the batch size, answer first N x C x d1 x d2
+            outputs = outputs.permute(2, 3, 0, 1)
+
+            # N x d1 x d2
+            labels = task_labels[:, :, None].expand(-1, -1, self.blocks)
+
+            if tasks is not None:
+                loss_mat = ((self.criterion(outputs, labels) - log_p_matrix + log_q_matrix) * q_matrix).sum(dim=2)
+                loss_mask = torch.zeros(loss_mat.shape[0], loss_mat.shape[1])
+                if self.cuda is not None:
+                    loss_mask = loss_mask.cuda(self.cuda)
+
+                loss_mask = loss_mask.scatter_(1, tasks.reshape(-1, 1), 1)
+                losses += (loss_mat * loss_mask).mean(0)
+            else:
+                loss = ((self.criterion(outputs, labels) - log_p_matrix + log_q_matrix) * q_matrix).mean(dim=0).sum(dim=1)
+                losses += loss
 
         return losses
